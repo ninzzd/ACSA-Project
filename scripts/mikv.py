@@ -17,11 +17,11 @@ def load_model(model_name: str = MODEL_NAME):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=DTYPE)
     model.to(DEVICE)
-    model.eval()
+    model.eval() # what does this do? 
     return model, tokenizer
 
 
-def quantize_kv(tensor: torch.Tensor, bits: int = 2) -> torch.Tensor:
+def quantize_kv(tensor: torch.Tensor, bits: int = 2) -> torch.Tensor: # does not include channel biasing factor b
     """
     Fake-quantize a single K or V tensor: round-trip it through a
     `bits`-wide affine quantizer (per key/value vector, i.e. per last dim)
@@ -32,8 +32,8 @@ def quantize_kv(tensor: torch.Tensor, bits: int = 2) -> torch.Tensor:
     """
     qmax = 2**bits - 1
     t_min = tensor.amin(dim=-1, keepdim=True)
-    t_max = tensor.amax(dim=-1, keepdim=True)
-    scale = (t_max - t_min).clamp(min=1e-8) / qmax
+    t_max = tensor.amax(dim=-1, keepdim=True) # max value across last dimension (dim = -1)
+    scale = (t_max - t_min).clamp(min=1e-8) / qmax # is clamping outlier aware?
     quantized = torch.round((tensor - t_min) / scale)
     dequantized = quantized * scale + t_min
     return dequantized.to(tensor.dtype)
@@ -55,12 +55,12 @@ def apply_kv_quantization(
             layer.values = quantize_kv(layer.values, bits=bits)
 
 
-@torch.no_grad()
+@torch.no_grad() # what does this do?
 def generate_with_kv_quantization(
     model,
     tokenizer,
     prompt: str,
-    max_new_tokens: int = 64,
+    max_tokens: int = 4096,
     bits: int = 8,
     quantize_every_step: bool = True,
 ) -> str:
@@ -74,7 +74,7 @@ def generate_with_kv_quantization(
     next_input_ids = input_ids
     cache = DynamicCache()
 
-    for _ in range(max_new_tokens):
+    for _ in range(max_tokens - input_ids.shape[-1]):
         outputs = model(
             input_ids=next_input_ids,
             past_key_values=cache,
@@ -103,6 +103,6 @@ if __name__ == "__main__":
     model, tokenizer = load_model()
     prompt = "The quick brown fox"
     output = generate_with_kv_quantization(
-        model, tokenizer, prompt, max_new_tokens=32, bits=8
+        model, tokenizer, prompt, max_tokens=32, bits=8
     )
     print(output)
