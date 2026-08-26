@@ -1,7 +1,7 @@
 """
-KV cache quantization policy for autoregressive inference on Qwen2.5-0.5B,
-implementing MiKV's channel-balanced, budget-constrained mixed-precision
-cache:
+KV cache quantization policy for autoregressive inference on
+Qwen2.5-0.5B-Instruct, implementing MiKV's channel-balanced,
+budget-constrained mixed-precision cache:
 
 - Prefill: derive a per-(layer, kv head, channel) balancer b from the
   prompt's Q/K statistics, run full causal attention to accumulate an
@@ -21,18 +21,40 @@ old single-lowest-score decode policy this can't be done by mutating the
 DynamicCache after the fact. `Qwen2Attention.forward` is therefore
 monkey-patched per layer to inject balancing, scoring and quantize-on-write
 around the same `attention_interface` call the stock implementation uses.
+
+Uses the -Instruct checkpoint, not the base model used earlier: the base
+model doesn't recognize any chat/turn structure (verified directly: given
+the paper's literal Llama-2-chat [INST]/<<SYS>> prompt, it emits EOS
+immediately, treating "[/INST]" as arbitrary text) so it can't be elicited
+into answering a system+user-style query at all. -Instruct is fine-tuned on
+Qwen's own ChatML template and responds properly to one, same architecture
+and config as the base model otherwise (`_kv_cache_shape`, GQA head counts,
+etc. all still apply unchanged).
 """
 
+import datetime
 import math
+import os
 import random
 import re
+import sys
 import types
 from dataclasses import dataclass
 
-import matplotlib
+# hf-xet (huggingface_hub's accelerated download backend) has been observed
+# to segfault -- no Python traceback, just a raw crash -- partway through a
+# first-time model weight download on this machine. Falling back to the
+# plain HTTP downloader is slower but doesn't crash. Must be set before
+# `transformers`/`huggingface_hub` are imported, since it's read once at
+# import time. `setdefault` so an explicit shell-level override still wins.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
-matplotlib.use("Agg")  # headless-safe: write figures to disk, never open a GUI window
-import matplotlib.pyplot as plt
+# torch/transformers MUST be imported before matplotlib: importing
+# matplotlib.pyplot first and transformers second segfaults on this
+# machine (a native-library symbol conflict between the two, order-
+# dependent -- whichever loads first wins the conflicting symbol). No
+# Python traceback, just a raw crash, so this ordering is load-bearing,
+# not stylistic -- don't reorder these two blocks.
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 from transformers.models.qwen2.modeling_qwen2 import (
@@ -41,26 +63,41 @@ from transformers.models.qwen2.modeling_qwen2 import (
     eager_attention_forward,
 )
 
-MODEL_NAME = "Qwen/Qwen2.5-0.5B"
+import matplotlib
+
+matplotlib.use("Agg")  # headless-safe: write figures to disk, never open a GUI window
+import matplotlib.pyplot as plt
+
+MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"  # openly accessible, no gating -- see module docstring
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
 DEFAULT_BUDGET_RATIO = 0.5  # k: importance budget, k = floor(BUDGET_RATIO * t_p)
 DEFAULT_WINDOW_RATIO = 0.5  # w: recency window, w = floor(WINDOW_RATIO * k)  (default: w = k/2)
-DEFAULT_HIGH_BITS = 8       # bit-width for the high-precision ("important") bucket
-DEFAULT_LOW_BITS = 2        # N: bit-width for the low-precision ("evicted") bucket
+DEFAULT_HIGH_BITS = 8        # bit-width the "important" bucket is quantized to when not left native
+DEFAULT_LOW_BITS = 2         # N: bit-width for the low-precision ("evicted") bucket
+DEFAULT_HIGH_PRECISION_NATIVE = True  # important tokens stay at the model's native bf16/fp16
+# (untouched) when True; quantized to DEFAULT_HIGH_BITS instead when False.
 
 
 def load_model(model_name: str = MODEL_NAME):
+    print(f"[load_model] device={DEVICE} dtype={DTYPE}", flush=True)
+
+    print(f"[load_model] fetching tokenizer for {model_name} (downloads on first run)...", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    print("[load_model] tokenizer ready", flush=True)
+
+    print(f"[load_model] fetching model weights for {model_name} (downloads ~1GB on first run)...", flush=True)
     # eager attention is required to get real softmaxed attention weights
     # back out of the forward pass (output_attentions=True is not
     # supported by the sdpa/flash-attention backends).
     model = AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=DTYPE, attn_implementation="eager"
     )
+    print(f"[load_model] weights loaded, moving model to {DEVICE}...", flush=True)
     model.to(DEVICE)
     model.eval()  # disables dropout etc.; inference-only forward passes
+    print("[load_model] model ready", flush=True)
     return model, tokenizer
 
 
@@ -111,12 +148,14 @@ class MiKVPolicy:
         window_ratio: float = DEFAULT_WINDOW_RATIO,
         high_bits: int = DEFAULT_HIGH_BITS,
         low_bits: int = DEFAULT_LOW_BITS,
+        high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
     ):
         self.num_kv_heads = num_kv_heads
         self.budget_ratio = budget_ratio
         self.window_ratio = window_ratio
         self.high_bits = high_bits
         self.low_bits = low_bits
+        self.high_precision_native = high_precision_native
 
         self.phase = "prefill"
         self.k = self.w = self.k_H = None
@@ -163,6 +202,13 @@ class MiKVPolicy:
 
     # ---- quantize on write ----
 
+    def _quantize_high(self, tensor: torch.Tensor) -> torch.Tensor:
+        """The "important" bucket: native bf16/fp16 (untouched) if high_precision_native,
+        else quantized to high_bits -- see DEFAULT_HIGH_PRECISION_NATIVE."""
+        if self.high_precision_native:
+            return tensor
+        return quantize_kv(tensor, bits=self.high_bits)
+
     def write_new_token(self, layer_idx, cache, k_bal_new, v_new):
         """
         The token just appended to the cache is always the most recent
@@ -171,8 +217,8 @@ class MiKVPolicy:
         """
         state = self._state(layer_idx)
         layer = cache.layers[layer_idx]
-        layer.keys[:, :, -1:, :] = quantize_kv(k_bal_new, bits=self.high_bits)
-        layer.values[:, :, -1:, :] = quantize_kv(v_new, bits=self.high_bits)
+        layer.keys[:, :, -1:, :] = self._quantize_high(k_bal_new)
+        layer.values[:, :, -1:, :] = self._quantize_high(v_new)
 
         batch = k_bal_new.shape[0]
         false = torch.zeros(batch, self.num_kv_heads, 1, dtype=torch.bool, device=k_bal_new.device)
@@ -189,8 +235,8 @@ class MiKVPolicy:
 
         high_mask = s.unsqueeze(-1)
         layer = cache.layers[layer_idx]
-        layer.keys[:] = torch.where(high_mask, quantize_kv(k_bal, bits=self.high_bits), quantize_kv(k_bal, bits=self.low_bits))
-        layer.values[:] = torch.where(high_mask, quantize_kv(v, bits=self.high_bits), quantize_kv(v, bits=self.low_bits))
+        layer.keys[:] = torch.where(high_mask, self._quantize_high(k_bal), quantize_kv(k_bal, bits=self.low_bits))
+        layer.values[:] = torch.where(high_mask, self._quantize_high(v), quantize_kv(v, bits=self.low_bits))
 
     def demote_decode(self, layer_idx, cache):
         state = self._state(layer_idx)
@@ -215,16 +261,14 @@ class MiKVPolicy:
         s = torch.zeros_like(a, dtype=torch.bool)
         s[:, :, t - self.w :] = True  # recency window: the w most recent positions
         if self.k_H > 0:
-            # decay: rank on a[i] / (t - i), not the raw sum, so a position isn't
-            # favored merely for having sat in the cache longer and accumulated
-            # more attention steps. Recomputed fresh from the raw `a` every call
-            # (never baked into state.a) since t grows every step. The newest
-            # position has age 0 but is always in the recency window above, so
-            # it's masked out of ranking regardless; clamp(min=1) just keeps
-            # that division finite.
-            age = torch.arange(t - 1, -1, -1, device=a.device, dtype=a.dtype).clamp(min=1)
-            decayed = a / age
-            candidates = decayed.masked_fill(s, float("-inf"))
+            # H2O's heavy-hitter score (Zhang et al. 2023, Alg. 1: F_score := sum_s o_s) is
+            # the raw cumulative sum of attention received, with no normalization by token
+            # age or step count -- rank directly on `a`, not on a derived per-step average.
+            # (A previous version of this code divided by age here; that's not in H2O or
+            # MiKV's spec, and it systematically discounts earlier positions in favor of
+            # later ones regardless of actual attention received, which is a confound the
+            # papers' own criterion doesn't have.)
+            candidates = a.masked_fill(s, float("-inf"))
             top = candidates.topk(self.k_H, dim=-1).indices  # top-(k - w) among the rest
             s.scatter_(-1, top, torch.ones_like(top, dtype=torch.bool))
         return s
@@ -295,7 +339,10 @@ def _mikv_attention_forward(
         attention_mask,
         dropout=0.0 if not self.training else self.attention_dropout,
         scaling=self.scaling,
-        sliding_window=self.sliding_window,
+        # not all attention modules define this (e.g. Llama's doesn't); harmless to omit
+        # under eager attention regardless, since eager_attention_forward never reads it
+        # -- windowing there is baked into the attention_mask upstream, not applied here.
+        sliding_window=getattr(self, "sliding_window", None),
         **kwargs,
     )
 
@@ -328,6 +375,7 @@ def _generate_tokens_with_mikv(
     window_ratio: float,
     high_bits: int,
     low_bits: int,
+    high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
 ) -> tuple[torch.Tensor, int]:
     """
     Manual autoregressive generation loop applying the MiKV KV cache
@@ -344,6 +392,7 @@ def _generate_tokens_with_mikv(
         window_ratio=window_ratio,
         high_bits=high_bits,
         low_bits=low_bits,
+        high_precision_native=high_precision_native,
     )
     _install_mikv_policy(model, policy)
 
@@ -386,9 +435,10 @@ def generate_with_mikv(
     window_ratio: float = DEFAULT_WINDOW_RATIO,
     high_bits: int = DEFAULT_HIGH_BITS,
     low_bits: int = DEFAULT_LOW_BITS,
+    high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
 ) -> str:
     generated, _ = _generate_tokens_with_mikv(
-        model, tokenizer, prompt, max_tokens, budget_ratio, window_ratio, high_bits, low_bits
+        model, tokenizer, prompt, max_tokens, budget_ratio, window_ratio, high_bits, low_bits, high_precision_native
     )
     return tokenizer.decode(generated[0], skip_special_tokens=True)
 
@@ -397,10 +447,16 @@ def generate_with_mikv(
 #
 # The paper measures MiKV's ability to preserve context under compression by
 # planting random "line <name>: REGISTER_CONTENT is <value>" facts in the
-# prompt and asking the model to retrieve one by name. We adapt the prompt
-# text from their Figure 15 (dropping the Llama-2-chat [INST]/<<SYS>>
-# wrapper, which Qwen2.5-0.5B's base tokenizer doesn't use) and reuse the
-# same instruction header and fact-line format.
+# prompt and asking the model to retrieve one by name (their Figure 15). We
+# reproduce the same system instruction + user message content, but deliver
+# it via the tokenizer's own chat template (`apply_chat_template`) rather
+# than hand-writing the literal Llama-2-chat [INST]/<<SYS>> syntax: that
+# syntax is specific to Llama-2-chat's training format, and on a model that
+# wasn't trained on it (verified directly against Qwen2.5-0.5B-base: it
+# treats "[/INST]" as arbitrary text and emits EOS immediately) it fails to
+# elicit any real response at all. The chat template achieves the same
+# semantic structure -- system instruction, then a user turn primed for a
+# reply -- in whatever format the target model actually understands.
 
 _LINE_ADJECTIVES = [
     "billowy", "psychotic", "daffy", "exclusive", "enthusiastic", "handsome",
@@ -426,12 +482,12 @@ class LineRetrievalSample:
 
 
 def make_line_retrieval_sample(
-    num_lines: int = 20, value_digits: int = 5, rng: random.Random | None = None
+    tokenizer, num_records: int = 20, value_digits: int = 5, rng: random.Random | None = None
 ) -> LineRetrievalSample:
-    """Build one synthetic Line Retrieval prompt: `num_lines` random facts, then a retrieval question."""
+    """Build one synthetic Line Retrieval prompt: `num_records` random facts, then a retrieval question."""
     rng = rng or random
     names = set()
-    while len(names) < num_lines:
+    while len(names) < num_records:
         names.add(f"{rng.choice(_LINE_ADJECTIVES)}-{rng.choice(_LINE_NOUNS)}")
     names = list(names)
     rng.shuffle(names)
@@ -441,18 +497,29 @@ def make_line_retrieval_sample(
     target_line = rng.choice(names)
 
     lines = "\n".join(f"line {name}: REGISTER_CONTENT is <{values[name]}>" for name in names)
-    prompt = (
-        "You are a record processing computer. Given a list of records, and a target "
-        "<line index>, you retrieve the '<REGISTER_CONTENT>' number.\n\n"
-        "Below is a record of lines I want you to remember. Each line begins with "
-        "'line <line index>' and contains a '<REGISTER_CONTENT>' at the end of the line "
-        "as a numerical value. For each line index, memorize its corresponding "
-        "<REGISTER_CONTENT>. At the end of the record, I will ask you to retrieve the "
-        "corresponding <REGISTER_CONTENT> of a certain line index. Now the record start:\n\n"
-        f"{lines}\n\n"
-        "Now the record is over. Tell me what is the <REGISTER_CONTENT> in line "
-        f"{target_line}? I need the number.\nAnswer: <"
-    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a record processing computer. Given a list of records, and a "
+                "target <line index>, you retrieve the '<REGISTER_CONTENT>' number."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Below is a record of lines I want you to remember. Each line begins with "
+                "'line <line index>' and contains a '<REGISTER_CONTENT>' at the end of the "
+                "line as a numerical value. For each line index, memorize its corresponding "
+                "<REGISTER_CONTENT>. At the end of the record, I will ask you to retrieve "
+                "the corresponding <REGISTER_CONTENT> of a certain line index. Now the "
+                f"record start:\n\n{lines}\n\n"
+                "Now the record is over. Tell me what is the <REGISTER_CONTENT> in line "
+                f"{target_line}? I need the number."
+            ),
+        },
+    ]
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     return LineRetrievalSample(prompt=prompt, target_line=target_line, expected_value=values[target_line])
 
 
@@ -465,24 +532,32 @@ def run_line_retrieval_benchmark(
     model,
     tokenizer,
     num_samples: int = 20,
-    num_lines: int = 20,
+    num_records: int = 20,
     budget_ratio: float = DEFAULT_BUDGET_RATIO,
     window_ratio: float = DEFAULT_WINDOW_RATIO,
     high_bits: int = DEFAULT_HIGH_BITS,
     low_bits: int = DEFAULT_LOW_BITS,
-    max_new_tokens: int = 12,
+    high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
+    max_new_tokens: int = 32,
     seed: int = 0,
 ) -> float:
     """
     Line Retrieval accuracy under the MiKV cache policy (paper Figure 3b /
     Table 1): generate `num_samples` synthetic line-retrieval prompts,
     greedily decode each under the mixed-precision policy, and score
-    whether the retrieved number matches the planted value.
+    whether the retrieved value matches the planted one.
     """
+    print(
+        f"[mikv] starting {num_samples} samples: budget_ratio={budget_ratio} window_ratio={window_ratio} "
+        f"high_bits={high_bits} low_bits={low_bits} high_precision_native={high_precision_native}",
+        flush=True,
+    )
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
     rng = random.Random(seed)
     correct = 0
     for i in range(num_samples):
-        sample = make_line_retrieval_sample(num_lines=num_lines, rng=rng)
+        sample = make_line_retrieval_sample(tokenizer, num_records=num_records, rng=rng)
         prompt_len = tokenizer(sample.prompt, return_tensors="pt").input_ids.shape[-1]
         generated, _ = _generate_tokens_with_mikv(
             model,
@@ -493,18 +568,31 @@ def run_line_retrieval_benchmark(
             window_ratio=window_ratio,
             high_bits=high_bits,
             low_bits=low_bits,
+            high_precision_native=high_precision_native,
         )
         continuation = tokenizer.decode(generated[0, prompt_len:], skip_special_tokens=True)
         predicted = _extract_number(continuation)
         is_correct = predicted == sample.expected_value
         correct += int(is_correct)
         print(
-            f"[{i + 1}/{num_samples}] target={sample.target_line} expected={sample.expected_value} "
-            f"predicted={predicted} {'OK' if is_correct else 'WRONG'}"
+            f"[mikv {i + 1}/{num_samples}] target={sample.target_line} expected={sample.expected_value} "
+            f"predicted={predicted} {'OK' if is_correct else 'WRONG'}",
+            flush=True,
         )
+        # Each sample re-installs a fresh MiKVPolicy and grows a new DynamicCache to a
+        # slightly different length (num_records draws a random count of unique names),
+        # so the CUDA caching allocator accumulates many differently-sized cached blocks
+        # over hundreds of samples. On a ~3.3GB-free GPU that's enough fragmentation to
+        # trigger (recoverable) OOM retries -- releasing the cache each sample keeps the
+        # allocator's pool from fragmenting across runs of varying shape.
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     accuracy = correct / num_samples
-    print(f"Line Retrieval accuracy: {accuracy * 100:.1f}% ({correct}/{num_samples})")
+    print(
+        f"[mikv] Line Retrieval accuracy: {accuracy * 100:.1f}% ({correct}/{num_samples}) {_cuda_mem_str()}",
+        flush=True,
+    )
     return accuracy
 
 
@@ -528,7 +616,32 @@ def _kv_cache_shape(model) -> tuple[int, int, int]:
     return num_layers, num_kv_heads, head_dim
 
 
-def kv_cache_size_bytes(model, seq_len: int, k: int | None = None, low_bits: int = DEFAULT_LOW_BITS) -> float:
+def _cuda_mem_str() -> str:
+    """
+    Real (not estimated) CUDA memory in MB, for diagnosing GPU pressure:
+    `allocated` is memory backing tensors actually live right now; `reserved`
+    is the caching allocator's total pool held from the driver (allocated +
+    cached-but-freed blocks kept around for reuse -- this is what nvidia-smi
+    /nvtop report as this process's VRAM usage, so it reads higher than
+    `allocated`); `peak_allocated` is the high-water mark for `allocated`
+    since the last `torch.cuda.reset_peak_memory_stats()` call.
+    """
+    if not torch.cuda.is_available():
+        return ""
+    allocated = torch.cuda.memory_allocated() / 1e6
+    reserved = torch.cuda.memory_reserved() / 1e6
+    peak = torch.cuda.max_memory_allocated() / 1e6
+    return f"cuda_mem: allocated={allocated:.0f}MB reserved={reserved:.0f}MB peak_allocated={peak:.0f}MB"
+
+
+def kv_cache_size_bytes(
+    model,
+    seq_len: int,
+    k: int | None = None,
+    high_bits: int = DEFAULT_HIGH_BITS,
+    low_bits: int = DEFAULT_LOW_BITS,
+    high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
+) -> float:
     """
     Estimate the KV cache footprint (bytes, K+V across all layers/heads)
     for a sequence of length `seq_len`.
@@ -537,7 +650,9 @@ def kv_cache_size_bytes(model, seq_len: int, k: int | None = None, low_bits: int
     16-bit dtype.
     k=<int>: MiKV steady state -- per `MiKVPolicy._importance_set`, the
     importance budget saturates at k positions and never grows past it, so
-    exactly min(seq_len, k) positions stay 16-bit and the remaining
+    exactly min(seq_len, k) positions stay HIGH precision (native 16-bit if
+    `high_precision_native`, else quantized to `high_bits` -- must match
+    whatever the accuracy run actually used) and the remaining
     max(0, seq_len - k) are compressed to `low_bits` (N).
     """
     num_layers, num_kv_heads, head_dim = _kv_cache_shape(model)
@@ -546,17 +661,18 @@ def kv_cache_size_bytes(model, seq_len: int, k: int | None = None, low_bits: int
     if k is None:
         return elements_per_token * seq_len * 16 / 8
 
+    high_bit_width = 16 if high_precision_native else high_bits
     num_high = min(seq_len, k)
     num_low = max(0, seq_len - k)
-    return elements_per_token * (num_high * 16 / 8 + num_low * low_bits / 8)
+    return elements_per_token * (num_high * high_bit_width / 8 + num_low * low_bits / 8)
 
 
 def run_line_retrieval_no_quant(
     model,
     tokenizer,
     num_samples: int = 20,
-    num_lines: int = 20,
-    max_new_tokens: int = 12,
+    num_records: int = 20,
+    max_new_tokens: int = 32,
     seed: int = 0,
 ) -> tuple[float, int, float]:
     """
@@ -564,7 +680,7 @@ def run_line_retrieval_no_quant(
     MiKV balancing, scoring, or quantization, so the KV cache stays at the
     model's native 16-bit dtype throughout. Establishes (a) t_p, the
     prompt length at the first prefill stage (constant across samples
-    since every prompt plants the same `num_lines` facts), and (b) the
+    since every prompt plants the same `num_records` facts), and (b) the
     "before compression" KV cache size at the end of generation -- both
     needed to evaluate the MiKV sweep in `sweep_kv_compression`.
 
@@ -575,17 +691,21 @@ def run_line_retrieval_no_quant(
 
     Returns (accuracy, t_p, avg_kv_cache_bytes_before_compression).
     """
+    print(f"[no-quant] starting {num_samples} baseline samples (num_records={num_records})...", flush=True)
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
     rng = random.Random(seed)
     pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
     correct = 0
     t_p = None
     total_bytes = 0.0
     for i in range(num_samples):
-        sample = make_line_retrieval_sample(num_lines=num_lines, rng=rng)
+        sample = make_line_retrieval_sample(tokenizer, num_records=num_records, rng=rng)
         input_ids = tokenizer(sample.prompt, return_tensors="pt").input_ids.to(DEVICE)
         prompt_len = input_ids.shape[-1]
         if t_p is None:
             t_p = prompt_len
+            print(f"[no-quant] t_p (prompt length) = {t_p} tokens", flush=True)
 
         output = model.generate(input_ids, max_new_tokens=max_new_tokens, do_sample=False, pad_token_id=pad_token_id)
         total_bytes += kv_cache_size_bytes(model, output.shape[-1], k=None)
@@ -596,14 +716,18 @@ def run_line_retrieval_no_quant(
         correct += int(is_correct)
         print(
             f"[no-quant {i + 1}/{num_samples}] target={sample.target_line} expected={sample.expected_value} "
-            f"predicted={predicted} {'OK' if is_correct else 'WRONG'}"
+            f"predicted={predicted} {'OK' if is_correct else 'WRONG'}",
+            flush=True,
         )
+        if torch.cuda.is_available():  # see the matching note in run_line_retrieval_benchmark
+            torch.cuda.empty_cache()
 
     accuracy = correct / num_samples
     avg_bytes = total_bytes / num_samples
     print(
-        f"No-quant baseline: accuracy={accuracy * 100:.1f}% ({correct}/{num_samples}) "
-        f"t_p={t_p} avg KV cache={avg_bytes / 1e6:.2f} MB"
+        f"[no-quant] baseline done: accuracy={accuracy * 100:.1f}% ({correct}/{num_samples}) "
+        f"t_p={t_p} avg KV cache={avg_bytes / 1e6:.2f} MB {_cuda_mem_str()}",
+        flush=True,
     )
     return accuracy, t_p, avg_bytes
 
@@ -613,12 +737,13 @@ def sweep_kv_compression(
     tokenizer,
     budget_ratios: tuple[float, ...] = (0.25, 0.5, 0.75),
     num_samples: int = 20,
-    num_lines: int = 20,
-    max_new_tokens: int = 12,
+    num_records: int = 20,
+    max_new_tokens: int = 32,
     seed: int = 0,
     window_ratio: float = DEFAULT_WINDOW_RATIO,
     high_bits: int = DEFAULT_HIGH_BITS,
     low_bits: int = DEFAULT_LOW_BITS,
+    high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
 ) -> list[dict]:
     """
     Sweep the importance budget k as a ratio of t_p (`budget_ratios`,
@@ -627,8 +752,9 @@ def sweep_kv_compression(
     under MiKV at each point. For every ratio, pairs the resulting
     accuracy with the estimated KV cache size at the end of generation
     (t_p + max_new_tokens; early EOS isn't tracked, so this is an upper
-    bound on the true final length): min(seq_len, k) positions stay
-    16-bit, the rest are compressed to `low_bits` (N) -- see
+    bound on the true final length): min(seq_len, k) positions stay HIGH
+    precision (native 16-bit, or `high_bits` if `high_precision_native` is
+    False), the rest are compressed to `low_bits` (N) -- see
     `kv_cache_size_bytes`.
 
     Runs the no-quant baseline itself, first, before installing any MiKV
@@ -638,27 +764,33 @@ def sweep_kv_compression(
     kv_size_before, kv_size_after, compression_pct -- ready to hand to
     `plot_accuracy_vs_compression`.
     """
+    print(f"[sweep] === stage 1/2: no-quant baseline (ratios to sweep: {list(budget_ratios)}) ===", flush=True)
     baseline_accuracy, t_p, kv_size_before = run_line_retrieval_no_quant(
-        model, tokenizer, num_samples=num_samples, num_lines=num_lines, max_new_tokens=max_new_tokens, seed=seed
+        model, tokenizer, num_samples=num_samples, num_records=num_records, max_new_tokens=max_new_tokens, seed=seed
     )
 
     seq_len = t_p + max_new_tokens
+    print(f"[sweep] === stage 2/2: MiKV runs at k = ratio * t_p ({t_p}) ===", flush=True)
     results = []
-    for ratio in budget_ratios:
+    for idx, ratio in enumerate(budget_ratios, start=1):
         k = max(1, math.floor(ratio * t_p))
+        print(f"[sweep] ({idx}/{len(budget_ratios)}) ratio={ratio} -> k={k}", flush=True)
         accuracy = run_line_retrieval_benchmark(
             model,
             tokenizer,
             num_samples=num_samples,
-            num_lines=num_lines,
+            num_records=num_records,
             budget_ratio=ratio,
             window_ratio=window_ratio,
             high_bits=high_bits,
             low_bits=low_bits,
+            high_precision_native=high_precision_native,
             max_new_tokens=max_new_tokens,
             seed=seed,
         )
-        kv_size_after = kv_cache_size_bytes(model, seq_len, k=k, low_bits=low_bits)
+        kv_size_after = kv_cache_size_bytes(
+            model, seq_len, k=k, high_bits=high_bits, low_bits=low_bits, high_precision_native=high_precision_native
+        )
         compression_pct = 100 * kv_size_after / kv_size_before
         results.append(
             dict(
@@ -671,13 +803,15 @@ def sweep_kv_compression(
             )
         )
         print(
-            f"ratio={ratio} k={k} accuracy={accuracy * 100:.1f}% KV compression={compression_pct:.1f}% "
-            f"(baseline accuracy={baseline_accuracy * 100:.1f}%)"
+            f"[sweep] ratio={ratio} k={k} accuracy={accuracy * 100:.1f}% KV compression={compression_pct:.1f}% "
+            f"(baseline accuracy={baseline_accuracy * 100:.1f}%)",
+            flush=True,
         )
+    print("[sweep] done", flush=True)
     return results
 
 
-def plot_accuracy_vs_compression(results: list[dict], save_path: str = "kv_compression_sweep.png"):
+def plot_accuracy_vs_compression(results: list[dict], save_path: str = "docs/kv_compression_sweep.png"):
     """
     Plot Line Retrieval accuracy against KV cache compression
     (100 * size_after(k) / size_before) across the budget sweep in
@@ -688,6 +822,7 @@ def plot_accuracy_vs_compression(results: list[dict], save_path: str = "kv_compr
     accuracies = [r["accuracy"] * 100 for r in results]
     labels = [f"k={r['k']} (r={r['ratio']})" for r in results]
 
+    print(f"[plot] rendering accuracy-vs-compression plot ({len(results)} points)...", flush=True)
     fig, ax = plt.subplots(figsize=(6, 4.5))
     ax.plot(compressions, accuracies, marker="o")
     for x, y, label in zip(compressions, accuracies, labels):
@@ -698,11 +833,62 @@ def plot_accuracy_vs_compression(results: list[dict], save_path: str = "kv_compr
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
-    print(f"Saved plot to {save_path}")
+    print(f"[plot] saved to {save_path}", flush=True)
     return fig
 
 
+class _Tee:
+    """Duplicates writes to multiple streams (e.g. the real stdout and a log file)."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
 if __name__ == "__main__":
-    model, tokenizer = load_model()
-    results = sweep_kv_compression(model, tokenizer, budget_ratios=(0.25, 0.5, 0.75), num_samples=20, num_lines=20)
-    plot_accuracy_vs_compression(results)
+    log_path = f"mikv_run_{datetime.datetime.now():%Y%m%d_%H%M%S}.log"
+    log_file = open(log_path, "w")
+    # stderr too, not just stdout: tqdm's progress bars and PyTorch's own [W...]
+    # warnings (e.g. the CUDA OOM-retry allocator warnings) are both written there,
+    # not to stdout, and interleaving them with our own prints in one file is the
+    # whole point -- correlating a memory warning with the sample it happened on.
+    _real_stdout, _real_stderr = sys.stdout, sys.stderr
+    sys.stdout = _Tee(_real_stdout, log_file)
+    sys.stderr = _Tee(_real_stderr, log_file)
+    try:
+        print(f"=== MiKV: logging this run to {log_path} ===", flush=True)
+
+        print("=== MiKV: loading model ===", flush=True)
+        model, tokenizer = load_model()
+
+        print("=== MiKV: starting KV-compression sweep ===", flush=True)
+        # num_samples=50: at n=20, one flipped sample swings accuracy by 5 points, drowning
+        # out real signal. 50 halves that per-sample noise to 2 points.
+        # num_records=100: eager attention materializes the full [t_p, t_p] attention-weight
+        # matrix (needed for scoring), so its memory is O(t_p^2). On this 4GB GPU,
+        # num_records=1000 (t_p ~ 15-20k) would blow well past available memory; 100
+        # (t_p ~ 1.5-2k) was verified comfortable against this exact architecture (24
+        # layers, 14 heads, 2 kv heads, ~1GB weights) -- the -Instruct checkpoint is the
+        # same config, just different fine-tuned weights, so this should still hold.
+        results = sweep_kv_compression(
+            model, tokenizer, budget_ratios=(0.25, 0.5, 0.75), num_samples=40, num_records=40
+        )
+
+        print("=== MiKV: plotting results ===", flush=True)
+        plot_accuracy_vs_compression(results)
+
+        print(f"=== MiKV: done (log saved to {log_path}) ===", flush=True)
+    finally:
+        # restore the real streams *before* closing log_file -- otherwise sys.stdout/
+        # stderr are left pointing at a Tee wrapping a closed file, which breaks
+        # whatever Python itself tries to print during interpreter shutdown.
+        sys.stdout, sys.stderr = _real_stdout, _real_stderr
+        log_file.close()
