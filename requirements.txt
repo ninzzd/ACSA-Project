@@ -23,3 +23,14 @@ matplotlib>=3.8
 
 # Config handling
 pyyaml>=6.0
+
+# Tokenizer conversion (SentencePiece → fast tokenizer)
+protobuf>=4.25
+
+# Attention / memory
+# (optional; requires CUDA build matching torch)
+# flash-attn>=2.5
+
+# Dataset backends commonly pulled by lm-eval tasks
+pyarrow>=15.0
+fsspec>=2024.2

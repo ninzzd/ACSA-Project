@@ -68,6 +68,14 @@ importance_set(a, t, k, w, k_H):
 - decode (steady state $t = k+1$): recompute $S$; the one position that falls out of $S$ is demoted to LOW bits — sticky, never promoted back.
 - HIGH means either the model's native bf16/fp16 (untouched) or quantized to `high_bits`, toggled by the global `high_precision_native` flag (default: native).
 
+### Running
+
+```bash
+python scripts/mikv.py
+```
+
+No CLI args — sweep parameters (`budget_ratios`, `num_samples`, `num_records`) are set in the `__main__` block ([mikv.py:881-883](../scripts/mikv.py#L881-L883)). Logs to `mikv_run_<timestamp>.log` (stdout+stderr tee'd) and saves the plot to `kv_compression_sweep.png` in the working directory.
+
 ### torch / transformers Integration
 
 Qwen2.5-0.5B-Instruct loaded via `AutoModelForCausalLM` with `attn_implementation="eager"` (only backend that returns real softmax attention weights, needed for scoring). Each layer's `Qwen2Attention.forward` is monkey-patched (`types.MethodType`) to wrap the stock `attention_interface` call: balance $Q,K$ by $b$ post-RoPE/pre-cache (a query is never cached, so this can't be done after the fact), write through to `DynamicCache.layers[i].keys/values` with a fake N-bit round-trip quantizer, then score and re-demote after attention runs. All state ($b$, $a$, $S$) is shaped `[batch, num_kv_heads, t]` per layer, so masking/`topk` apply per kv-head automatically via broadcasting — no explicit per-head loop.
