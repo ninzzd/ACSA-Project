@@ -548,7 +548,7 @@ def run_line_retrieval_benchmark(
     high_bits: int = DEFAULT_HIGH_BITS,
     low_bits: int = DEFAULT_LOW_BITS,
     high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
-    max_new_tokens: int = 32,
+    max_tokens: int = 4096,
     seed: int = 0,
 ) -> float:
     """
@@ -556,6 +556,10 @@ def run_line_retrieval_benchmark(
     Table 1): generate `num_samples` synthetic line-retrieval prompts,
     greedily decode each under the mixed-precision policy, and score
     whether the retrieved value matches the planted one.
+
+    `max_tokens` is the total context budget (prompt + generation), not
+    just the new-token count -- e.g. 4096 to simulate a 4K-context run,
+    however long the planted-record prompt happens to be.
     """
     print(
         f"[mikv] starting {num_samples} samples: budget_ratio={budget_ratio} window_ratio={window_ratio} "
@@ -573,7 +577,7 @@ def run_line_retrieval_benchmark(
             model,
             tokenizer,
             sample.prompt,
-            max_tokens=prompt_len + max_new_tokens,
+            max_tokens=max_tokens,
             budget_ratio=budget_ratio,
             window_ratio=window_ratio,
             high_bits=high_bits,
@@ -682,7 +686,7 @@ def run_line_retrieval_no_quant(
     tokenizer,
     num_samples: int = 20,
     num_records: int = 20,
-    max_new_tokens: int = 32,
+    max_tokens: int = 4096,
     seed: int = 0,
 ) -> tuple[float, int, float]:
     """
@@ -698,6 +702,10 @@ def run_line_retrieval_no_quant(
     `run_line_retrieval_benchmark`, ...): those monkey-patch each layer's
     attention forward in place and never restore the original, so once
     installed there is no unpatched model left to baseline against.
+
+    `max_tokens` is the total context budget (prompt + generation), passed
+    straight to `model.generate(..., max_length=max_tokens)` so it means
+    the same thing here as it does in `run_line_retrieval_benchmark`.
 
     Returns (accuracy, t_p, avg_kv_cache_bytes_before_compression).
     """
@@ -717,7 +725,7 @@ def run_line_retrieval_no_quant(
             t_p = prompt_len
             print(f"[no-quant] t_p (prompt length) = {t_p} tokens", flush=True)
 
-        output = model.generate(input_ids, max_new_tokens=max_new_tokens, do_sample=False, pad_token_id=pad_token_id)
+        output = model.generate(input_ids, max_length=max_tokens, do_sample=False, pad_token_id=pad_token_id)
         total_bytes += kv_cache_size_bytes(model, output.shape[-1], k=None)
 
         continuation = tokenizer.decode(output[0, prompt_len:], skip_special_tokens=True)
@@ -748,7 +756,7 @@ def sweep_kv_compression(
     budget_ratios: tuple[float, ...] = (0.25, 0.5, 0.75),
     num_samples: int = 20,
     num_records: int = 20,
-    max_new_tokens: int = 32,
+    max_tokens: int = 4096,
     seed: int = 0,
     window_ratio: float = DEFAULT_WINDOW_RATIO,
     high_bits: int = DEFAULT_HIGH_BITS,
@@ -761,7 +769,8 @@ def sweep_kv_compression(
     0.5*t_p, 0.75*t_p by default) and run the Line Retrieval benchmark
     under MiKV at each point. For every ratio, pairs the resulting
     accuracy with the estimated KV cache size at the end of generation
-    (t_p + max_new_tokens; early EOS isn't tracked, so this is an upper
+    (`max_tokens`, the total context budget passed through to both the
+    baseline and MiKV runs; early EOS isn't tracked, so this is an upper
     bound on the true final length): min(seq_len, k) positions stay HIGH
     precision (native 16-bit, or `high_bits` if `high_precision_native` is
     False), the rest are compressed to `low_bits` (N) -- see
@@ -776,10 +785,10 @@ def sweep_kv_compression(
     """
     print(f"[sweep] === stage 1/2: no-quant baseline (ratios to sweep: {list(budget_ratios)}) ===", flush=True)
     baseline_accuracy, t_p, kv_size_before = run_line_retrieval_no_quant(
-        model, tokenizer, num_samples=num_samples, num_records=num_records, max_new_tokens=max_new_tokens, seed=seed
+        model, tokenizer, num_samples=num_samples, num_records=num_records, max_tokens=max_tokens, seed=seed
     )
 
-    seq_len = t_p + max_new_tokens
+    seq_len = max_tokens
     print(f"[sweep] === stage 2/2: MiKV runs at k = ratio * t_p ({t_p}) ===", flush=True)
     results = []
     for idx, ratio in enumerate(budget_ratios, start=1):
@@ -795,7 +804,7 @@ def sweep_kv_compression(
             high_bits=high_bits,
             low_bits=low_bits,
             high_precision_native=high_precision_native,
-            max_new_tokens=max_new_tokens,
+            max_tokens=max_tokens,
             seed=seed,
         )
         kv_size_after = kv_cache_size_bytes(
@@ -889,7 +898,7 @@ if __name__ == "__main__":
         # ~13GB weights) has a much larger footprint per token, so these were NOT
         # re-verified against it; check available VRAM before scaling num_records up.
         results = sweep_kv_compression(
-            model, tokenizer, budget_ratios=(0.25, 0.5, 0.75), num_samples=40, num_records=40
+            model, tokenizer, budget_ratios=(0.25, 0.5, 0.75), num_samples=40, num_records=40, max_tokens=4096
         )
 
         print("=== MiKV: plotting results ===", flush=True)
