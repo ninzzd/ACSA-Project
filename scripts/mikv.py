@@ -79,7 +79,7 @@ MODEL_NAME = "meta-llama/Llama-2-7b-chat-hf"  # chat-tuned checkpoint -- the bas
 # gated -- requires an accepted license + `huggingface-cli login` (or HF_TOKEN) with
 # access approved
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
 
 DEFAULT_BUDGET_RATIO = 0.5  # k: importance budget, k = floor(BUDGET_RATIO * t_p)
 DEFAULT_WINDOW_RATIO = 0.5  # w: recency window, w = floor(WINDOW_RATIO * k)  (default: w = k/2)
