@@ -68,7 +68,7 @@ import matplotlib
 matplotlib.use("Agg")  # headless-safe: write figures to disk, never open a GUI window
 import matplotlib.pyplot as plt
 
-MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"  # openly accessible, no gating -- see module docstring
+MODEL_NAME = "meta-llama/Llama-2-7b"  # openly accessible, no gating -- see module docstring
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
