@@ -1,6 +1,6 @@
 """
 KV cache quantization policy for autoregressive inference on
-Qwen2.5-0.5B-Instruct, implementing MiKV's channel-balanced,
+Llama-2-7b-chat-hf, implementing MiKV's channel-balanced,
 budget-constrained mixed-precision cache:
 
 - Prefill: derive a per-(layer, kv head, channel) balancer b from the
@@ -18,18 +18,24 @@ Q/K must be intercepted post-RoPE, pre-cache, inside each layer's
 attention forward: the balancer has to divide the *query actually used to
 produce this step's output*, and a query is never cached, so unlike the
 old single-lowest-score decode policy this can't be done by mutating the
-DynamicCache after the fact. `Qwen2Attention.forward` is therefore
+DynamicCache after the fact. `LlamaAttention.forward` is therefore
 monkey-patched per layer to inject balancing, scoring and quantize-on-write
-around the same `attention_interface` call the stock implementation uses.
+around the same `attention_interface` call the stock implementation uses
+(the rotary/eager-attention helper functions used here happen to be
+imported from transformers' Qwen2 module, but are byte-identical to
+Llama's own -- both are copied from the same upstream implementation).
 
-Uses the -Instruct checkpoint, not the base model used earlier: the base
-model doesn't recognize any chat/turn structure (verified directly: given
-the paper's literal Llama-2-chat [INST]/<<SYS>> prompt, it emits EOS
-immediately, treating "[/INST]" as arbitrary text) so it can't be elicited
-into answering a system+user-style query at all. -Instruct is fine-tuned on
-Qwen's own ChatML template and responds properly to one, same architecture
-and config as the base model otherwise (`_kv_cache_shape`, GQA head counts,
-etc. all still apply unchanged).
+Uses the -chat checkpoint, not the base model: the base model doesn't
+recognize any chat/turn structure and ships no `chat_template`, so
+`apply_chat_template()` can't even be called on it, let alone elicit a
+system+user-style response. -chat is fine-tuned on Llama-2's own
+[INST]/<<SYS>> template and responds properly to one via
+`tokenizer.apply_chat_template`, same architecture and config as the base
+model otherwise (`_kv_cache_shape`, head counts, etc. all still apply
+unchanged). Unlike Qwen2.5, Llama-2-7b uses plain multi-head attention
+(no GQA: num_key_value_heads == num_attention_heads), so `num_kv_groups`
+is always 1 here -- the code handles that as a special case of the
+general GQA path, not a separate branch.
 """
 
 import datetime
@@ -68,7 +74,10 @@ import matplotlib
 matplotlib.use("Agg")  # headless-safe: write figures to disk, never open a GUI window
 import matplotlib.pyplot as plt
 
-MODEL_NAME = "meta-llama/Llama-2-7b"  # openly accessible, no gating -- see module docstring
+MODEL_NAME = "meta-llama/Llama-2-7b-chat-hf"  # chat-tuned checkpoint -- the base
+# Llama-2-7b-hf ships no chat_template, so apply_chat_template() below would raise;
+# gated -- requires an accepted license + `huggingface-cli login` (or HF_TOKEN) with
+# access approved
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
@@ -87,7 +96,7 @@ def load_model(model_name: str = MODEL_NAME):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     print("[load_model] tokenizer ready", flush=True)
 
-    print(f"[load_model] fetching model weights for {model_name} (downloads ~1GB on first run)...", flush=True)
+    print(f"[load_model] fetching model weights for {model_name} (downloads ~13GB on first run)...", flush=True)
     # eager attention is required to get real softmaxed attention weights
     # back out of the forward pass (output_attentions=True is not
     # supported by the sdpa/flash-attention backends).
@@ -450,13 +459,14 @@ def generate_with_mikv(
 # prompt and asking the model to retrieve one by name (their Figure 15). We
 # reproduce the same system instruction + user message content, but deliver
 # it via the tokenizer's own chat template (`apply_chat_template`) rather
-# than hand-writing the literal Llama-2-chat [INST]/<<SYS>> syntax: that
-# syntax is specific to Llama-2-chat's training format, and on a model that
-# wasn't trained on it (verified directly against Qwen2.5-0.5B-base: it
+# than hand-writing the literal Llama-2-chat [INST]/<<SYS>> syntax directly:
+# that syntax is specific to Llama-2-chat's training format, and on a model
+# that wasn't trained on it (verified directly against a base model: it
 # treats "[/INST]" as arbitrary text and emits EOS immediately) it fails to
 # elicit any real response at all. The chat template achieves the same
 # semantic structure -- system instruction, then a user turn primed for a
-# reply -- in whatever format the target model actually understands.
+# reply -- in whatever format the target model actually understands, so
+# this same code path works unchanged across chat-tuned models.
 
 _LINE_ADJECTIVES = [
     "billowy", "psychotic", "daffy", "exclusive", "enthusiastic", "handsome",
@@ -872,12 +882,12 @@ if __name__ == "__main__":
         print("=== MiKV: starting KV-compression sweep ===", flush=True)
         # num_samples=50: at n=20, one flipped sample swings accuracy by 5 points, drowning
         # out real signal. 50 halves that per-sample noise to 2 points.
-        # num_records=100: eager attention materializes the full [t_p, t_p] attention-weight
-        # matrix (needed for scoring), so its memory is O(t_p^2). On this 4GB GPU,
-        # num_records=1000 (t_p ~ 15-20k) would blow well past available memory; 100
-        # (t_p ~ 1.5-2k) was verified comfortable against this exact architecture (24
-        # layers, 14 heads, 2 kv heads, ~1GB weights) -- the -Instruct checkpoint is the
-        # same config, just different fine-tuned weights, so this should still hold.
+        # num_records: eager attention materializes the full [t_p, t_p] attention-weight
+        # matrix per layer (needed for scoring), so its memory is O(t_p^2). These values
+        # were sized against Qwen2.5-0.5B-Instruct (24 layers, 14 heads, 2 kv heads,
+        # ~1GB weights) on a 4GB GPU -- Llama-2-7b-chat-hf (32 layers, 32 heads, no GQA,
+        # ~13GB weights) has a much larger footprint per token, so these were NOT
+        # re-verified against it; check available VRAM before scaling num_records up.
         results = sweep_kv_compression(
             model, tokenizer, budget_ratios=(0.25, 0.5, 0.75), num_samples=40, num_records=40
         )
