@@ -86,7 +86,7 @@ DEFAULT_BUDGET_RATIO = 0.5  # k: importance budget, k = floor(BUDGET_RATIO * t_p
 DEFAULT_WINDOW_RATIO = 0.5  # w: recency window, w = floor(WINDOW_RATIO * k)  (default: w = k/2)
 DEFAULT_HIGH_BITS = 8        # bit-width the "important" bucket is quantized to when not left native
 DEFAULT_LOW_BITS = 2         # N: bit-width for the low-precision ("evicted") bucket
-DEFAULT_HIGH_PRECISION_NATIVE = True  # important tokens stay at the model's native bf16/fp16
+DEFAULT_HIGH_PRECISION_NATIVE = True  # important tokens stay at the model's native fp16
 # (untouched) when True; quantized to DEFAULT_HIGH_BITS instead when False.
 
 # Channel-balancer variants (see MiKVPolicy.balance_prefill_* for the math):
@@ -218,9 +218,13 @@ class MiKVPolicy:
         batch, _, t_p, head_dim = query_states.shape
 
         q_by_group = query_states.view(batch, self.num_kv_heads, num_kv_groups, t_p, head_dim)
+        # amax/divide/sqrt in fp32: the ratio can be large enough to overflow fp16
+        # before the sqrt pulls it back. Cast b back to the model dtype afterwards --
+        # leaving it fp32 silently promotes Q/K in _apply_balance and blows up at
+        # o_proj (fp16 weights) with a "mat1 and mat2 have the same dtype" error.
         q_max = q_by_group.abs().amax(dim=(0, 2, 3)).float().clamp(min=1e-8)
         k_max = key_states.abs().amax(dim=(0, 2)).float().clamp(min=1e-8)
-        b = torch.sqrt(q_max / k_max).clamp(min=1e-4)
+        b = torch.sqrt(q_max / k_max).clamp(min=1e-4).to(query_states.dtype)
         state.b = b
 
         return self._apply_balance(state.b, query_states, key_states, num_kv_groups)
@@ -261,6 +265,11 @@ class MiKVPolicy:
         return self._apply_balance(state.b, query_states, key_states, num_kv_groups)
 
     def _apply_balance(self, b, query_states, key_states, num_kv_groups):
+        # Chokepoint cast: every balancer variant's b meets Q/K here, and a b left in
+        # a wider dtype would promote them, propagating fp32 through attention until
+        # o_proj rejects it against its fp16 weights. Cheap, and it keeps a new
+        # scheme from reintroducing that failure.
+        b = b.to(query_states.dtype)
         head_dim = b.shape[-1]
         num_q_heads = query_states.shape[1]
         b_k = b.view(1, self.num_kv_heads, 1, head_dim)
@@ -270,7 +279,7 @@ class MiKVPolicy:
     # ---- quantize on write ----
 
     def _quantize_high(self, tensor: torch.Tensor) -> torch.Tensor:
-        """The "important" bucket: native bf16/fp16 (untouched) if high_precision_native,
+        """The "important" bucket: native fp16 (untouched) if high_precision_native,
         else quantized to high_bits -- see DEFAULT_HIGH_PRECISION_NATIVE."""
         if self.high_precision_native:
             return tensor
@@ -362,11 +371,14 @@ class MiKVPolicy:
         # The newest token has t - i = 0, which would blow up, so decay is
         # applied only to positions [0, t-1] and the last position is left as
         # the plain running sum.
+        # Build the divisor in fp32, not the score dtype: fp16 only represents
+        # integers exactly up to 2048, above which spacing is 2 (4095 rounds to
+        # 4096), so at a 4096-token context the distances for older positions come
+        # out wrong. clamp(min=1) covers the newest token, whose distance is 0.
         updated = state.a + p
         last = t - 1
-        divisor = (last - torch.arange(t, device=updated.device, dtype=updated.dtype))
-        divisor[last] = 1.0  # newest token: no decay (avoids /0)
-        state.a = updated / divisor
+        divisor = (last - torch.arange(t, device=updated.device, dtype=torch.float32)).clamp(min=1.0)
+        state.a = (updated.float() / divisor).to(state.a.dtype)
 
 
 def _mikv_attention_forward(
