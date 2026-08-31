@@ -110,20 +110,26 @@ def load_model(model_name: str = MODEL_NAME):
     return model, tokenizer
 
 
-def quantize_kv(tensor: torch.Tensor, bits: int = 2) -> torch.Tensor:  # does not include channel biasing factor b
+def quantize_kv(tensor: torch.Tensor, bits: int = 2, group_size: int | None = None) -> torch.Tensor:
     """
     Fake-quantize K/V vectors: round-trip them through a `bits`-wide affine
-    quantizer (per vector, i.e. per last dim) and dequantize back to floats.
+    quantizer and dequantize back to the input dtype. Quantization is
+    per-group along the last dim -- `group_size` consecutive channels share
+    one (min, max) pair; `group_size=None` splits `head_dim` into two
+    groups. Does not include the channel biasing factor b.
 
     tensor: (..., head_dim)
     """
+    if bits >= 16:
+        return tensor
+    d = tensor.shape[-1]
+    g = group_size or d // 2
+    shp = tensor.shape
+    t = tensor.reshape(*shp[:-1], d // g, g)
     qmax = 2**bits - 1
-    t_min = tensor.amin(dim=-1, keepdim=True)
-    t_max = tensor.amax(dim=-1, keepdim=True)
+    t_min, t_max = t.amin(-1, keepdim=True), t.amax(-1, keepdim=True)
     scale = (t_max - t_min).clamp(min=1e-8) / qmax
-    quantized = torch.round((tensor - t_min) / scale)
-    dequantized = quantized * scale + t_min
-    return dequantized.to(tensor.dtype)
+    return (torch.round((t - t_min) / scale) * scale + t_min).reshape(shp).to(tensor.dtype)
 
 
 @dataclass
@@ -188,14 +194,45 @@ class MiKVPolicy:
     def balance_prefill(self, layer_idx, query_states, key_states, num_kv_groups):
         """b[c] = sqrt(max_i|Q[i,c]| / max_i|K[i,c]|), per (layer, kv head, channel)."""
         state = self._state(layer_idx)
-        batch, num_q_heads, t_p, head_dim = query_states.shape
+        batch, _, t_p, head_dim = query_states.shape
 
         q_by_group = query_states.view(batch, self.num_kv_heads, num_kv_groups, t_p, head_dim)
-        q_max = q_by_group.abs().amax(dim=(0, 2, 3))  # [num_kv_heads, head_dim]
-        k_max = key_states.abs().amax(dim=(0, 2))  # [num_kv_heads, head_dim]
-        b = torch.sqrt(q_max / k_max.clamp(min=1e-8)).clamp(min=1e-4)
+        q_max = q_by_group.abs().amax(dim=(0, 2, 3)).float().clamp(min=1e-8)
+        k_max = key_states.abs().amax(dim=(0, 2)).float().clamp(min=1e-8)
+        b = torch.sqrt(q_max / k_max).clamp(min=1e-4)
         state.b = b
 
+        return self._apply_balance(state.b, query_states, key_states, num_kv_groups)
+
+    def balance_prefill_new(self, layer_idx, query_states, key_states, num_kv_groups):
+        """b[c] = 2^round((exp(max_i|Q[i,c]|) - exp(max_i|K[i,c]|)) / 2),
+        per (layer, kv head, channel). Exponent-only: mantissas are discarded,
+        so b is an exact power of two and applying it is lossless in fp16."""
+        state = self._state(layer_idx)
+        batch, num_q_heads, t_p, head_dim = query_states.shape
+        q_by_group = query_states.view(batch, self.num_kv_heads, num_kv_groups, t_p, head_dim)
+        q_max = q_by_group.abs().amax(dim=(0, 2, 3))        # [num_kv_heads, head_dim]
+        k_max = key_states.abs().amax(dim=(0, 2))           # [num_kv_heads, head_dim]
+
+        # Guard against exact zeros before taking exponents.
+        q_max = q_max.clamp(min=1e-8)
+        k_max = k_max.clamp(min=1e-8)
+
+        # frexp: x = mantissa * 2**exponent, mantissa in [0.5, 1)
+        # => IEEE exponent = exponent - 1; the -1 cancels in the difference.
+        _, q_exp = torch.frexp(q_max.float())               # int32
+        _, k_exp = torch.frexp(k_max.float())
+        d = q_exp - k_exp                                   # int32
+
+        # round(d / 2) with ties going away from zero
+        s = torch.where(d >= 0, (d + 1).div(2, rounding_mode='floor'),
+                            -((-d + 1).div(2, rounding_mode='floor')))
+
+        # b = 2**s, built exactly via ldexp (no pow, no rounding error)
+        b = torch.ldexp(torch.ones_like(s, dtype=torch.float32), s)
+        b = b.to(query_states.dtype)
+
+        state.b = b
         return self._apply_balance(state.b, query_states, key_states, num_kv_groups)
 
     def balance_decode(self, layer_idx, query_states, key_states, num_kv_groups):
@@ -287,15 +324,28 @@ class MiKVPolicy:
     def score_prefill(self, layer_idx, attn_weights, num_kv_groups):
         """a[j] = sum over all query positions i (and, for GQA, over the group's query heads)."""
         state = self._state(layer_idx)
-        batch, num_q_heads, t_p, _ = attn_weights.shape
+        batch, _, t_p, _ = attn_weights.shape
         w = attn_weights.view(batch, self.num_kv_heads, num_kv_groups, t_p, t_p)
         state.a = w.sum(dim=(2, 3))  # -> [batch, num_kv_heads, t_p]
 
     def score_decode(self, layer_idx, attn_weights, num_kv_groups):
         state = self._state(layer_idx)
-        batch, num_q_heads, _, t = attn_weights.shape
+        batch, _, _, t = attn_weights.shape
         p = attn_weights[:, :, 0, :].view(batch, self.num_kv_heads, num_kv_groups, t).sum(dim=2)
-        state.a = state.a + p
+
+        # Age decay: a[i] <- (a[i] + attn[i]) / (t - i), where t = index of the
+        # current (newest) token = seq_len - 1 and i is a position index. Raw
+        # cumulative attention accrues from prefill onward, so without this the
+        # earliest positions carry a structural head start unrelated to how
+        # relevant they still are; dividing by distance-to-now discounts that.
+        # The newest token has t - i = 0, which would blow up, so decay is
+        # applied only to positions [0, t-1] and the last position is left as
+        # the plain running sum.
+        updated = state.a + p
+        last = t - 1
+        divisor = (last - torch.arange(t, device=updated.device, dtype=updated.dtype))
+        divisor[last] = 1.0  # newest token: no decay (avoids /0)
+        state.a = updated / divisor
 
 
 def _mikv_attention_forward(
@@ -534,8 +584,11 @@ def make_line_retrieval_sample(
 
 
 def _extract_number(text: str) -> int | None:
-    match = re.search(r"-?\d+", text)
-    return int(match.group()) if match else None
+    m = re.search(r"<(-?\d+)>", text)          # prefer the paper's <...> format
+    if m:
+        return int(m.group(1))
+    nums = re.findall(r"-?\d{4,6}", text)      # else: first plausible register value
+    return int(nums[0]) if nums else None
 
 
 def run_line_retrieval_benchmark(
@@ -688,7 +741,7 @@ def run_line_retrieval_no_quant(
     num_records: int = 20,
     max_tokens: int = 4096,
     seed: int = 0,
-) -> tuple[float, int, float]:
+) -> tuple[float, int, float, float]:
     """
     Baseline Line Retrieval pass with the stock HF generation loop -- no
     MiKV balancing, scoring, or quantization, so the KV cache stays at the
@@ -707,16 +760,20 @@ def run_line_retrieval_no_quant(
     straight to `model.generate(..., max_length=max_tokens)` so it means
     the same thing here as it does in `run_line_retrieval_benchmark`.
 
-    Returns (accuracy, t_p, avg_kv_cache_bytes_before_compression).
+    Returns (accuracy, t_p, avg_kv_cache_bytes_before_compression,
+    avg_seq_len), where avg_seq_len is the mean prompt+generation length
+    over the samples -- used to size the post-compression estimate in
+    `sweep_kv_compression`.
     """
     print(f"[no-quant] starting {num_samples} baseline samples (num_records={num_records})...", flush=True)
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
     rng = random.Random(seed)
-    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+    pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     correct = 0
     t_p = None
     total_bytes = 0.0
+    total_seq_len = 0
     for i in range(num_samples):
         sample = make_line_retrieval_sample(tokenizer, num_records=num_records, rng=rng)
         input_ids = tokenizer(sample.prompt, return_tensors="pt").input_ids.to(DEVICE)
@@ -726,7 +783,9 @@ def run_line_retrieval_no_quant(
             print(f"[no-quant] t_p (prompt length) = {t_p} tokens", flush=True)
 
         output = model.generate(input_ids, max_length=max_tokens, do_sample=False, pad_token_id=pad_token_id)
-        total_bytes += kv_cache_size_bytes(model, output.shape[-1], k=None)
+        seq_len = output.shape[-1]
+        total_seq_len += seq_len
+        total_bytes += kv_cache_size_bytes(model, seq_len, k=None)
 
         continuation = tokenizer.decode(output[0, prompt_len:], skip_special_tokens=True)
         predicted = _extract_number(continuation)
@@ -747,7 +806,9 @@ def run_line_retrieval_no_quant(
         f"t_p={t_p} avg KV cache={avg_bytes / 1e6:.2f} MB {_cuda_mem_str()}",
         flush=True,
     )
-    return accuracy, t_p, avg_bytes
+
+    avg_seq_len = total_seq_len / num_samples
+    return accuracy, t_p, avg_bytes, avg_seq_len
 
 
 def sweep_kv_compression(
@@ -768,13 +829,12 @@ def sweep_kv_compression(
     applied against the no-quant baseline's prompt length -- 0.25*t_p,
     0.5*t_p, 0.75*t_p by default) and run the Line Retrieval benchmark
     under MiKV at each point. For every ratio, pairs the resulting
-    accuracy with the estimated KV cache size at the end of generation
-    (`max_tokens`, the total context budget passed through to both the
-    baseline and MiKV runs; early EOS isn't tracked, so this is an upper
-    bound on the true final length): min(seq_len, k) positions stay HIGH
-    precision (native 16-bit, or `high_bits` if `high_precision_native` is
-    False), the rest are compressed to `low_bits` (N) -- see
-    `kv_cache_size_bytes`.
+    accuracy with the estimated KV cache size at the end of generation,
+    sized from the no-quant baseline's mean prompt+generation length
+    (`avg_seq_len`, so early EOS is already reflected): min(seq_len, k)
+    positions stay HIGH precision (native 16-bit, or `high_bits` if
+    `high_precision_native` is False), the rest are compressed to
+    `low_bits` (N) -- see `kv_cache_size_bytes`.
 
     Runs the no-quant baseline itself, first, before installing any MiKV
     patch -- see `run_line_retrieval_no_quant`.
@@ -784,11 +844,12 @@ def sweep_kv_compression(
     `plot_accuracy_vs_compression`.
     """
     print(f"[sweep] === stage 1/2: no-quant baseline (ratios to sweep: {list(budget_ratios)}) ===", flush=True)
-    baseline_accuracy, t_p, kv_size_before = run_line_retrieval_no_quant(
+    baseline_accuracy, t_p, kv_size_before, avg_seq_len = run_line_retrieval_no_quant(
         model, tokenizer, num_samples=num_samples, num_records=num_records, max_tokens=max_tokens, seed=seed
     )
 
-    seq_len = max_tokens
+    seq_len = round(avg_seq_len)
+
     print(f"[sweep] === stage 2/2: MiKV runs at k = ratio * t_p ({t_p}) ===", flush=True)
     results = []
     for idx, ratio in enumerate(budget_ratios, start=1):
@@ -889,8 +950,8 @@ if __name__ == "__main__":
         model, tokenizer = load_model()
 
         print("=== MiKV: starting KV-compression sweep ===", flush=True)
-        # num_samples=50: at n=20, one flipped sample swings accuracy by 5 points, drowning
-        # out real signal. 50 halves that per-sample noise to 2 points.
+        # num_samples=40: at n=20, one flipped sample swings accuracy by 5 points, drowning
+        # out real signal. 40 roughly halves that per-sample noise.
         # num_records: eager attention materializes the full [t_p, t_p] attention-weight
         # matrix per layer (needed for scoring), so its memory is O(t_p^2). These values
         # were sized against Qwen2.5-0.5B-Instruct (24 layers, 14 heads, 2 kv heads,
