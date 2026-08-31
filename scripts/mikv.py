@@ -38,6 +38,7 @@ is always 1 here -- the code handles that as a special case of the
 general GQA path, not a separate branch.
 """
 
+import csv
 import datetime
 import math
 import os
@@ -87,6 +88,16 @@ DEFAULT_HIGH_BITS = 8        # bit-width the "important" bucket is quantized to 
 DEFAULT_LOW_BITS = 2         # N: bit-width for the low-precision ("evicted") bucket
 DEFAULT_HIGH_PRECISION_NATIVE = True  # important tokens stay at the model's native bf16/fp16
 # (untouched) when True; quantized to DEFAULT_HIGH_BITS instead when False.
+
+# Channel-balancer variants (see MiKVPolicy.balance_prefill_* for the math):
+#   "paper" -- b = sqrt(q_max / k_max), the balancer as specified in MiKV.
+#   "pow2"  -- b snapped to the nearest power of two, exponent-only. Applying it
+#              is then an exact exponent add/subtract in fp16 rather than a real
+#              multiply, which is what a hardware implementation wants; the cost
+#              is that b is quantized to the 2^n grid instead of exact.
+BALANCE_SCHEMES = ("paper", "pow2")
+DEFAULT_BALANCE_SCHEME = "paper"
+_BALANCE_SCHEME_LABELS = {"paper": "MiKV (sqrt)", "pow2": "hardware (pow-2)"}
 
 
 def load_model(model_name: str = MODEL_NAME):
@@ -164,13 +175,17 @@ class MiKVPolicy:
         high_bits: int = DEFAULT_HIGH_BITS,
         low_bits: int = DEFAULT_LOW_BITS,
         high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
+        balance_scheme: str = DEFAULT_BALANCE_SCHEME,
     ):
+        if balance_scheme not in BALANCE_SCHEMES:
+            raise ValueError(f"balance_scheme must be one of {BALANCE_SCHEMES}, got {balance_scheme!r}")
         self.num_kv_heads = num_kv_heads
         self.budget_ratio = budget_ratio
         self.window_ratio = window_ratio
         self.high_bits = high_bits
         self.low_bits = low_bits
         self.high_precision_native = high_precision_native
+        self.balance_scheme = balance_scheme
 
         self.phase = "prefill"
         self.k = self.w = self.k_H = None
@@ -192,6 +207,12 @@ class MiKVPolicy:
     # ---- channel balancing (called post-RoPE, pre-cache) ----
 
     def balance_prefill(self, layer_idx, query_states, key_states, num_kv_groups):
+        """Dispatch to the configured balancer variant -- see BALANCE_SCHEMES."""
+        if self.balance_scheme == "pow2":
+            return self.balance_prefill_pow2(layer_idx, query_states, key_states, num_kv_groups)
+        return self.balance_prefill_paper(layer_idx, query_states, key_states, num_kv_groups)
+
+    def balance_prefill_paper(self, layer_idx, query_states, key_states, num_kv_groups):
         """b[c] = sqrt(max_i|Q[i,c]| / max_i|K[i,c]|), per (layer, kv head, channel)."""
         state = self._state(layer_idx)
         batch, _, t_p, head_dim = query_states.shape
@@ -204,12 +225,12 @@ class MiKVPolicy:
 
         return self._apply_balance(state.b, query_states, key_states, num_kv_groups)
 
-    def balance_prefill_new(self, layer_idx, query_states, key_states, num_kv_groups):
+    def balance_prefill_pow2(self, layer_idx, query_states, key_states, num_kv_groups):
         """b[c] = 2^round((exp(max_i|Q[i,c]|) - exp(max_i|K[i,c]|)) / 2),
         per (layer, kv head, channel). Exponent-only: mantissas are discarded,
         so b is an exact power of two and applying it is lossless in fp16."""
         state = self._state(layer_idx)
-        batch, num_q_heads, t_p, head_dim = query_states.shape
+        batch, _, t_p, head_dim = query_states.shape
         q_by_group = query_states.view(batch, self.num_kv_heads, num_kv_groups, t_p, head_dim)
         q_max = q_by_group.abs().amax(dim=(0, 2, 3))        # [num_kv_heads, head_dim]
         k_max = key_states.abs().amax(dim=(0, 2))           # [num_kv_heads, head_dim]
@@ -435,6 +456,7 @@ def _generate_tokens_with_mikv(
     high_bits: int,
     low_bits: int,
     high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
+    balance_scheme: str = DEFAULT_BALANCE_SCHEME,
 ) -> tuple[torch.Tensor, int]:
     """
     Manual autoregressive generation loop applying the MiKV KV cache
@@ -452,6 +474,7 @@ def _generate_tokens_with_mikv(
         high_bits=high_bits,
         low_bits=low_bits,
         high_precision_native=high_precision_native,
+        balance_scheme=balance_scheme,
     )
     _install_mikv_policy(model, policy)
 
@@ -495,9 +518,19 @@ def generate_with_mikv(
     high_bits: int = DEFAULT_HIGH_BITS,
     low_bits: int = DEFAULT_LOW_BITS,
     high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
+    balance_scheme: str = DEFAULT_BALANCE_SCHEME,
 ) -> str:
     generated, _ = _generate_tokens_with_mikv(
-        model, tokenizer, prompt, max_tokens, budget_ratio, window_ratio, high_bits, low_bits, high_precision_native
+        model,
+        tokenizer,
+        prompt,
+        max_tokens,
+        budget_ratio,
+        window_ratio,
+        high_bits,
+        low_bits,
+        high_precision_native,
+        balance_scheme,
     )
     return tokenizer.decode(generated[0], skip_special_tokens=True)
 
@@ -601,6 +634,7 @@ def run_line_retrieval_benchmark(
     high_bits: int = DEFAULT_HIGH_BITS,
     low_bits: int = DEFAULT_LOW_BITS,
     high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
+    balance_scheme: str = DEFAULT_BALANCE_SCHEME,
     max_tokens: int = 4096,
     seed: int = 0,
 ) -> float:
@@ -613,10 +647,13 @@ def run_line_retrieval_benchmark(
     `max_tokens` is the total context budget (prompt + generation), not
     just the new-token count -- e.g. 4096 to simulate a 4K-context run,
     however long the planted-record prompt happens to be.
+
+    `balance_scheme` selects the channel balancer -- see BALANCE_SCHEMES.
     """
     print(
-        f"[mikv] starting {num_samples} samples: budget_ratio={budget_ratio} window_ratio={window_ratio} "
-        f"high_bits={high_bits} low_bits={low_bits} high_precision_native={high_precision_native}",
+        f"[mikv] starting {num_samples} samples: balance_scheme={balance_scheme} budget_ratio={budget_ratio} "
+        f"window_ratio={window_ratio} high_bits={high_bits} low_bits={low_bits} "
+        f"high_precision_native={high_precision_native}",
         flush=True,
     )
     if torch.cuda.is_available():
@@ -636,6 +673,7 @@ def run_line_retrieval_benchmark(
             high_bits=high_bits,
             low_bits=low_bits,
             high_precision_native=high_precision_native,
+            balance_scheme=balance_scheme,
         )
         continuation = tokenizer.decode(generated[0, prompt_len:], skip_special_tokens=True)
         predicted = _extract_number(continuation)
@@ -657,7 +695,8 @@ def run_line_retrieval_benchmark(
 
     accuracy = correct / num_samples
     print(
-        f"[mikv] Line Retrieval accuracy: {accuracy * 100:.1f}% ({correct}/{num_samples}) {_cuda_mem_str()}",
+        f"[mikv] Line Retrieval accuracy ({balance_scheme}): {accuracy * 100:.1f}% "
+        f"({correct}/{num_samples}) {_cuda_mem_str()}",
         flush=True,
     )
     return accuracy
@@ -760,10 +799,12 @@ def run_line_retrieval_no_quant(
     straight to `model.generate(..., max_length=max_tokens)` so it means
     the same thing here as it does in `run_line_retrieval_benchmark`.
 
-    Returns (accuracy, t_p, avg_kv_cache_bytes_before_compression,
-    avg_seq_len), where avg_seq_len is the mean prompt+generation length
-    over the samples -- used to size the post-compression estimate in
-    `sweep_kv_compression`.
+    Returns (accuracy, t_p, avg_kv_cache_bytes_occupied, avg_seq_len).
+    The last two describe what generation actually *occupied* (decoding
+    stops at EOS, typically well short of `max_tokens`) and are reported
+    as diagnostics only -- `sweep_kv_compression` sizes its compression
+    ratio at the fixed provisioned context instead, since mixing an
+    occupancy figure with a provisioned one overstates compression.
     """
     print(f"[no-quant] starting {num_samples} baseline samples (num_records={num_records})...", flush=True)
     if torch.cuda.is_available():
@@ -823,98 +864,297 @@ def sweep_kv_compression(
     high_bits: int = DEFAULT_HIGH_BITS,
     low_bits: int = DEFAULT_LOW_BITS,
     high_precision_native: bool = DEFAULT_HIGH_PRECISION_NATIVE,
+    balance_schemes: tuple[str, ...] = BALANCE_SCHEMES,
 ) -> list[dict]:
     """
     Sweep the importance budget k as a ratio of t_p (`budget_ratios`,
     applied against the no-quant baseline's prompt length -- 0.25*t_p,
-    0.5*t_p, 0.75*t_p by default) and run the Line Retrieval benchmark
-    under MiKV at each point. For every ratio, pairs the resulting
-    accuracy with the estimated KV cache size at the end of generation,
-    sized from the no-quant baseline's mean prompt+generation length
-    (`avg_seq_len`, so early EOS is already reflected): min(seq_len, k)
-    positions stay HIGH precision (native 16-bit, or `high_bits` if
-    `high_precision_native` is False), the rest are compressed to
-    `low_bits` (N) -- see `kv_cache_size_bytes`.
+    0.5*t_p, 0.75*t_p by default), for each channel-balancer variant in
+    `balance_schemes`, and run the Line Retrieval benchmark under MiKV at
+    every (scheme, ratio) point. For every point, pairs the resulting
+    accuracy with the KV cache footprint at a **fixed** context length of
+    `max_tokens` -- the context the hardware target provisions, so that
+    full allocation is what compression acts on. Both the uncompressed
+    baseline (`kv_size_before`) and the MiKV estimate (`kv_size_after`)
+    are computed at that same `seq_len`, so the ratio between them is
+    meaningful; min(seq_len, k) positions stay HIGH precision (native
+    16-bit, or `high_bits` if `high_precision_native` is False), the rest
+    are compressed to `low_bits` (N) -- see `kv_cache_size_bytes`.
+
+    The length generation actually reached is reported separately
+    (`avg_seq_len` / `kv_bytes_occupied`) as a diagnostic: it is usually
+    well short of `max_tokens` because decoding stops at EOS, so it
+    measures occupancy rather than the provisioned allocation. Do not mix
+    the two bases in one ratio.
 
     Runs the no-quant baseline itself, first, before installing any MiKV
     patch -- see `run_line_retrieval_no_quant`.
 
-    Returns a list of dicts (one per ratio): ratio, k, accuracy,
-    kv_size_before, kv_size_after, compression_pct -- ready to hand to
+    The footprint depends only on (seq_len, k, bit widths), so it is the
+    same for every scheme at a given ratio -- the schemes are compared on
+    accuracy at equal compression, not on compression.
+
+    Returns a flat list of dicts, one per (scheme, ratio): scheme, ratio,
+    k, accuracy, baseline_accuracy, seq_len, kv_size_before,
+    kv_size_after, compression_pct, plus the avg_seq_len /
+    kv_bytes_occupied diagnostics -- ready to hand to
+    `format_results_table`, `write_results_csv` and
     `plot_accuracy_vs_compression`.
     """
     print(f"[sweep] === stage 1/2: no-quant baseline (ratios to sweep: {list(budget_ratios)}) ===", flush=True)
-    baseline_accuracy, t_p, kv_size_before, avg_seq_len = run_line_retrieval_no_quant(
+    baseline_accuracy, t_p, kv_bytes_occupied, avg_seq_len = run_line_retrieval_no_quant(
         model, tokenizer, num_samples=num_samples, num_records=num_records, max_tokens=max_tokens, seed=seed
     )
 
-    seq_len = round(avg_seq_len)
+    # Both sides of the compression ratio are sized at the fixed context the
+    # target provisions (`max_tokens`), not at the length generation happened to
+    # reach: the hardware allocates a full max_tokens-token KV cache up front, so
+    # that allocation is what compression acts on. The two sides MUST share a
+    # basis -- an earlier version sized kv_size_after at max_tokens while taking
+    # kv_size_before from the baseline's measured per-sample length, putting a
+    # provisioned figure over an occupancy one and overstating compression.
+    seq_len = max_tokens
+    kv_size_before = kv_cache_size_bytes(model, seq_len, k=None)
+    print(
+        f"[sweep] sizing at fixed context seq_len={seq_len}: uncompressed KV={kv_size_before / 1e6:.2f} MB "
+        f"(baseline generation actually reached avg {avg_seq_len:.0f} tokens = "
+        f"{kv_bytes_occupied / 1e6:.2f} MB occupied)",
+        flush=True,
+    )
 
-    print(f"[sweep] === stage 2/2: MiKV runs at k = ratio * t_p ({t_p}) ===", flush=True)
+    # The compression estimate depends only on (seq_len, k, bit widths), so it is
+    # identical across balancer schemes -- the schemes differ in *accuracy* at the
+    # same footprint, which is the whole point of comparing them. Only the
+    # benchmark is re-run per scheme.
+    total_runs = len(balance_schemes) * len(budget_ratios)
+    print(
+        f"[sweep] === stage 2/2: {total_runs} MiKV runs "
+        f"({len(balance_schemes)} schemes x {len(budget_ratios)} ratios) at k = ratio * t_p ({t_p}) ===",
+        flush=True,
+    )
     results = []
-    for idx, ratio in enumerate(budget_ratios, start=1):
-        k = max(1, math.floor(ratio * t_p))
-        print(f"[sweep] ({idx}/{len(budget_ratios)}) ratio={ratio} -> k={k}", flush=True)
-        accuracy = run_line_retrieval_benchmark(
-            model,
-            tokenizer,
-            num_samples=num_samples,
-            num_records=num_records,
-            budget_ratio=ratio,
-            window_ratio=window_ratio,
-            high_bits=high_bits,
-            low_bits=low_bits,
-            high_precision_native=high_precision_native,
-            max_tokens=max_tokens,
-            seed=seed,
-        )
-        kv_size_after = kv_cache_size_bytes(
-            model, seq_len, k=k, high_bits=high_bits, low_bits=low_bits, high_precision_native=high_precision_native
-        )
-        compression_pct = 100 * kv_size_after / kv_size_before
-        results.append(
-            dict(
-                ratio=ratio,
-                k=k,
-                accuracy=accuracy,
-                kv_size_before=kv_size_before,
-                kv_size_after=kv_size_after,
-                compression_pct=compression_pct,
+    run = 0
+    for scheme in balance_schemes:
+        for ratio in budget_ratios:
+            run += 1
+            k = max(1, math.floor(ratio * t_p))
+            print(f"[sweep] ({run}/{total_runs}) scheme={scheme} ratio={ratio} -> k={k}", flush=True)
+            accuracy = run_line_retrieval_benchmark(
+                model,
+                tokenizer,
+                num_samples=num_samples,
+                num_records=num_records,
+                budget_ratio=ratio,
+                window_ratio=window_ratio,
+                high_bits=high_bits,
+                low_bits=low_bits,
+                high_precision_native=high_precision_native,
+                balance_scheme=scheme,
+                max_tokens=max_tokens,
+                seed=seed,
             )
-        )
-        print(
-            f"[sweep] ratio={ratio} k={k} accuracy={accuracy * 100:.1f}% KV compression={compression_pct:.1f}% "
-            f"(baseline accuracy={baseline_accuracy * 100:.1f}%)",
-            flush=True,
-        )
+            kv_size_after = kv_cache_size_bytes(
+                model, seq_len, k=k, high_bits=high_bits, low_bits=low_bits,
+                high_precision_native=high_precision_native,
+            )
+            compression_pct = 100 * kv_size_after / kv_size_before
+            results.append(
+                dict(
+                    scheme=scheme,
+                    ratio=ratio,
+                    k=k,
+                    accuracy=accuracy,
+                    baseline_accuracy=baseline_accuracy,
+                    seq_len=seq_len,  # the fixed context both sizes are computed at
+                    kv_size_before=kv_size_before,
+                    kv_size_after=kv_size_after,
+                    compression_pct=compression_pct,
+                    # diagnostics: what generation actually occupied, for comparison
+                    # against the provisioned figure above
+                    avg_seq_len=avg_seq_len,
+                    kv_bytes_occupied=kv_bytes_occupied,
+                )
+            )
+            print(
+                f"[sweep] scheme={scheme} ratio={ratio} k={k} accuracy={accuracy * 100:.1f}% "
+                f"KV compression={compression_pct:.1f}% (baseline accuracy={baseline_accuracy * 100:.1f}%)",
+                flush=True,
+            )
     print("[sweep] done", flush=True)
     return results
 
 
-def plot_accuracy_vs_compression(results: list[dict], save_path: str = "docs/kv_compression_sweep.png"):
+def _schemes_in(results: list[dict]) -> list[str]:
+    """Distinct schemes present in `results`, in first-seen order."""
+    seen = []
+    for r in results:
+        scheme = r.get("scheme", DEFAULT_BALANCE_SCHEME)
+        if scheme not in seen:
+            seen.append(scheme)
+    return seen
+
+
+def format_results_table(results: list[dict]) -> str:
+    """
+    Render the sweep as a markdown table, one section per balancer scheme,
+    plus a head-to-head accuracy comparison when more than one scheme ran.
+    Returned as a string so the caller can both print it (into the tee'd
+    log) and paste it into the docs.
+    """
+    schemes = _schemes_in(results)
+    lines = []
+
+    baseline = results[0]["baseline_accuracy"] * 100 if results else float("nan")
+    seq_len = results[0]["seq_len"] if results else 0
+    kv_before_mb = results[0]["kv_size_before"] / 1e6 if results else 0.0
+    lines.append(
+        f"Sizing basis: fixed context seq_len={seq_len} tokens, "
+        f"uncompressed KV = {kv_before_mb:.1f} MB. "
+        f"Uncompressed baseline accuracy = {baseline:.1f}%."
+    )
+    lines.append("")
+
+    for scheme in schemes:
+        rows = [r for r in results if r.get("scheme", DEFAULT_BALANCE_SCHEME) == scheme]
+        lines.append(f"### Balancer: {scheme} -- {_BALANCE_SCHEME_LABELS.get(scheme, scheme)}")
+        lines.append("")
+        lines.append("| ratio | k | KV after (MB) | KV size (% of uncompressed) | accuracy |")
+        lines.append("|---|---|---|---|---|")
+        lines.append(f"| - (uncompressed) | - | {kv_before_mb:.1f} | 100.0% | {baseline:.1f}% |")
+        for r in rows:
+            lines.append(
+                f"| {r['ratio']} | {r['k']} | {r['kv_size_after'] / 1e6:.1f} | "
+                f"{r['compression_pct']:.1f}% | {r['accuracy'] * 100:.1f}% |"
+            )
+        lines.append("")
+
+    if len(schemes) > 1:
+        lines.append("### Head-to-head (accuracy at equal compression)")
+        lines.append("")
+        header = "| ratio | k | KV size (%) | " + " | ".join(schemes) + " |"
+        lines.append(header)
+        lines.append("|---|---|---|" + "---|" * len(schemes))
+        by_ratio: dict[float, dict[str, dict]] = {}
+        for r in results:
+            by_ratio.setdefault(r["ratio"], {})[r.get("scheme", DEFAULT_BALANCE_SCHEME)] = r
+        for ratio in sorted(by_ratio):
+            per_scheme = by_ratio[ratio]
+            any_row = next(iter(per_scheme.values()))
+            cells = [
+                f"{per_scheme[s]['accuracy'] * 100:.1f}%" if s in per_scheme else "-" for s in schemes
+            ]
+            lines.append(
+                f"| {ratio} | {any_row['k']} | {any_row['compression_pct']:.1f}% | " + " | ".join(cells) + " |"
+            )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def write_results_csv(results: list[dict], save_path: str = "docs/kv_compression_sweep.csv") -> str:
+    """Dump the raw sweep rows to CSV (all keys, one row per (scheme, ratio))."""
+    if not results:
+        return save_path
+    fieldnames = list(results[0].keys())
+    with open(save_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"[csv] wrote {len(results)} rows to {save_path}", flush=True)
+    return save_path
+
+
+def plot_accuracy_vs_compression(
+    results: list[dict], save_path: str = "docs/kv_compression_sweep.png"
+) -> list[str]:
     """
     Plot Line Retrieval accuracy against KV cache compression
     (100 * size_after(k) / size_before) across the budget sweep in
-    `results` (as returned by `sweep_kv_compression`). Saves to
-    `save_path` since matplotlib runs headless (Agg backend) here.
-    """
-    compressions = [r["compression_pct"] for r in results]
-    accuracies = [r["accuracy"] * 100 for r in results]
-    labels = [f"k={r['k']} (r={r['ratio']})" for r in results]
+    `results` (as returned by `sweep_kv_compression`).
 
-    print(f"[plot] rendering accuracy-vs-compression plot ({len(results)} points)...", flush=True)
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    ax.plot(compressions, accuracies, marker="o")
-    for x, y, label in zip(compressions, accuracies, labels):
-        ax.annotate(label, (x, y), textcoords="offset points", xytext=(6, 4))
-    ax.set_xlabel("KV cache size after compression (% of uncompressed)")
-    ax.set_ylabel("Line Retrieval accuracy (%)")
-    ax.set_title("MiKV: accuracy vs. KV cache compression")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=150)
-    print(f"[plot] saved to {save_path}", flush=True)
-    return fig
+    Writes one figure per balancer scheme -- `save_path` with the scheme
+    name appended before the extension (e.g. `..._paper.png`,
+    `..._pow2.png`) -- plus, when more than one scheme ran, a combined
+    overlay at `save_path` itself for direct comparison. Saves to disk
+    since matplotlib runs headless (Agg backend) here. Returns the list of
+    paths written.
+    """
+    schemes = _schemes_in(results)
+    stem, ext = os.path.splitext(save_path)
+    written = []
+
+    def _draw(ax, rows, label=None, annotate=True):
+        compressions = [r["compression_pct"] for r in rows]
+        accuracies = [r["accuracy"] * 100 for r in rows]
+        order = sorted(range(len(rows)), key=lambda i: compressions[i])
+        xs = [compressions[i] for i in order]
+        ys = [accuracies[i] for i in order]
+        ax.plot(xs, ys, marker="o", label=label)
+        if not annotate:
+            return
+        for i in order:
+            ax.annotate(
+                f"k={rows[i]['k']} (r={rows[i]['ratio']})",
+                (compressions[i], accuracies[i]),
+                textcoords="offset points",
+                xytext=(6, 4),
+                fontsize=8,
+            )
+
+    # one figure per scheme
+    for scheme in schemes:
+        rows = [r for r in results if r.get("scheme", DEFAULT_BALANCE_SCHEME) == scheme]
+        path = f"{stem}_{scheme}{ext}"
+        print(f"[plot] rendering {scheme} plot ({len(rows)} points)...", flush=True)
+        fig, ax = plt.subplots(figsize=(6, 4.5))
+        _draw(ax, rows)
+        if rows:
+            ax.axhline(
+                rows[0]["baseline_accuracy"] * 100,
+                linestyle="--",
+                linewidth=1,
+                color="gray",
+                label="uncompressed baseline",
+            )
+            ax.legend(fontsize=8)
+        ax.set_xlabel("KV cache size after compression (% of uncompressed)")
+        ax.set_ylabel("Line Retrieval accuracy (%)")
+        ax.set_title(f"MiKV: accuracy vs. KV compression -- {_BALANCE_SCHEME_LABELS.get(scheme, scheme)}")
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        print(f"[plot] saved to {path}", flush=True)
+        written.append(path)
+
+    # combined overlay
+    if len(schemes) > 1:
+        print("[plot] rendering combined overlay...", flush=True)
+        fig, ax = plt.subplots(figsize=(6, 4.5))
+        for i, scheme in enumerate(schemes):
+            rows = [r for r in results if r.get("scheme", DEFAULT_BALANCE_SCHEME) == scheme]
+            # annotate once only -- every series sits at the same k/compression points,
+            # so repeating the labels per series just overplots them
+            _draw(ax, rows, label=_BALANCE_SCHEME_LABELS.get(scheme, scheme), annotate=(i == 0))
+        ax.axhline(
+            results[0]["baseline_accuracy"] * 100,
+            linestyle="--",
+            linewidth=1,
+            color="gray",
+            label="uncompressed baseline",
+        )
+        ax.set_xlabel("KV cache size after compression (% of uncompressed)")
+        ax.set_ylabel("Line Retrieval accuracy (%)")
+        ax.set_title("MiKV: accuracy vs. KV compression -- balancer comparison")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        fig.savefig(save_path, dpi=150)
+        plt.close(fig)
+        print(f"[plot] saved to {save_path}", flush=True)
+        written.append(save_path)
+
+    return written
 
 
 class _Tee:
@@ -958,9 +1198,23 @@ if __name__ == "__main__":
         # ~1GB weights) on a 4GB GPU -- Llama-2-7b-chat-hf (32 layers, 32 heads, no GQA,
         # ~13GB weights) has a much larger footprint per token, so these were NOT
         # re-verified against it; check available VRAM before scaling num_records up.
+        # balance_schemes: both channel balancers are swept over the same ratios, so
+        # each ratio yields an accuracy for the paper's sqrt(q_max/k_max) balancer and
+        # for the hardware-favouring power-of-two one at an identical KV footprint.
+        # This doubles the number of benchmark runs.
         results = sweep_kv_compression(
-            model, tokenizer, budget_ratios=(0.25, 0.5, 0.75), num_samples=40, num_records=40, max_tokens=4096
+            model,
+            tokenizer,
+            budget_ratios=(0.25, 0.5, 0.75),
+            num_samples=40,
+            num_records=40,
+            max_tokens=4096,
+            balance_schemes=BALANCE_SCHEMES,
         )
+
+        print("=== MiKV: results ===", flush=True)
+        print(format_results_table(results), flush=True)
+        write_results_csv(results)
 
         print("=== MiKV: plotting results ===", flush=True)
         plot_accuracy_vs_compression(results)

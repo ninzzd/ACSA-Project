@@ -108,7 +108,15 @@ Two ordering constraints in the imports are load-bearing, not stylistic (both ca
 
 **Answer extraction** (`_extract_number`) prefers the paper's own `<12345>` bracketed form, falling back to the first 4–6 digit run. The original "first integer anywhere in the continuation" rule scored preamble digits ("line 3 says…") as the answer, undercounting correct responses.
 
-**Compression accounting.** `kv_size_after` is now sized from the no-quant baseline's *measured* mean prompt+generation length (`avg_seq_len`) rather than `max_tokens`. Generation almost always stops at EOS well short of the 4096 budget, so the old constant inflated both sides of the ratio and compressed the reported spread between budgets.
+**Compression accounting — fixed at a 4096-token context.** The hardware target provisions a full 4096-token KV cache up front, so that allocation is what compression acts on. Both sides of the ratio are therefore computed at `seq_len = max_tokens = 4096`:
+
+$$
+\text{compression} = \frac{\min(L,k)\cdot 16 + \max(0, L-k)\cdot N}{L \cdot 16}, \qquad L = 4096
+$$
+
+> **Fixed — mixed-basis ratio.** An earlier version sized the numerator at `max_tokens` (4096, *provisioned*) while the denominator came from the baseline's measured per-sample `output.shape[-1]` (~$t_p$ + a short generation, *occupied*). Those are different quantities, so the quotient was not a compression ratio; it overstated the retained fraction substantially — at $t_p = 1709$, $N = 2$ and ~1750 tokens occupied, $k = 0.25\,t_p$ reads 50.6% on the mixed basis versus 21.6% correctly. Both sides now share the fixed-4096 basis.
+
+The length generation actually reaches (`avg_seq_len`, and the `kv_bytes_occupied` it implies) is still measured and reported, but only as a **diagnostic** — decoding stops at EOS well short of 4096, so it describes occupancy, not the provisioned allocation. It is carried in the per-ratio result dicts and must not be mixed into the ratio.
 
 ### Experimental Findings: Line Retrieval vs. KV Compression
 
