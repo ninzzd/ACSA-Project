@@ -177,13 +177,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     out = parser.add_argument_group("output")
     out.add_argument("--csv", default="docs/kv_compression_sweep.csv")
     # Plotting is OFF by default. A sweep is hours of GPU time whose product is
-    # the CSV and the tables; the figures are a rendering of those and can be
-    # regenerated from the CSV at any time, so they are not worth failing a
-    # finished sweep over (a matplotlib error after the last run would otherwise
-    # take the run down inside the try block).
+    # the CSV and the tables; the figures are a rendering of those, so they are
+    # not worth failing a finished sweep over (a matplotlib error after the last
+    # run would otherwise take the run down inside the try block). Note there is
+    # no CSV -> figure path today: --plots renders from the in-memory results of
+    # the run that just happened, so a sweep whose figures you want needs it set.
     out.add_argument("--plots", action="store_true",
                      help="also render the figures (off by default; the CSV and tables "
-                          "are the sweep's product and the plots regenerate from them)")
+                          "are the sweep's product, and a matplotlib failure must not "
+                          "be able to take down a finished sweep)")
     out.add_argument("--plot", default="docs/kv_compression_sweep.png",
                      help="base path for the figures, used only with --plots")
     out.add_argument("--no-checkpoint", action="store_true",
@@ -342,7 +344,7 @@ if __name__ == "__main__":
         else:
             print(
                 "=== MiKV: plotting disabled (pass --plots to render figures; "
-                "they can also be regenerated from the CSV later) ===",
+                "note they are rendered only by the run that produces them) ===",
                 flush=True,
             )
 

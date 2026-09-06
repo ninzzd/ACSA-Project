@@ -270,7 +270,48 @@ What each preset costs, at the observed 3.5 min/run on a V100:
 | `legacy` | 4 | 12 | ~0.7 h | the historical sweep, kept reproducible by name |
 | `exhaustive` | 2304 | 6912 | **~16.8 d** | to be costed with `--dry`, not launched |
 
-Logs to `mikv_run_<timestamp>.log` (stdout+stderr tee'd), or to `results/<type>/run_<timestamp>.log` under `--bg`. **Plotting is off by default** — the CSV and the tables are the sweep's product and the figures regenerate from them, so a matplotlib error must not be able to take down a finished sweep; pass `--plots` to render them.
+Logs to `mikv_run_<timestamp>.log` (stdout+stderr tee'd), or to `results/<type>/run_<timestamp>.log` under `--bg`. **Plotting is off by default** — the CSV and the tables are the sweep’s product and a matplotlib error must not be able to take down a finished sweep; pass `--plots` to render them (see the note on figures below).
+
+**On the SLURM cluster**, `jobs_sweep.sh` (repo root) submits a sweep, mirroring the structure of the existing single-run `jobs.sh` (same partition, environment, provenance echoes) but wrapping `scripts/run_sweep.sh` instead of calling `mikv.py` directly, so a batch sweep still gets its own results directory and a checkpointed CSV:
+
+```bash
+sbatch jobs_sweep.sh greedy                                       # the recommended pass
+sbatch jobs_sweep.sh confirm --low-bits 2,4 --window-tokens 32,64  # narrowed, as above
+sbatch --time=02:00:00 jobs_sweep.sh ofat --age-lut-entries 128,256,512
+```
+
+`--time` on the `sbatch` command line overrides the script's `#SBATCH --time` default (24h) — size it to the preset from the table above. Never submit `exhaustive`; cost it with `--dry` from a login node instead. `run_sweep.sh`'s interactive confirm is guarded by `[ -t 0 ]`, so it proceeds straight through under `sbatch` (no tty) without blocking on a prompt that would never be answered.
+
+**First time on a new machine**, before any of the above:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+huggingface-cli login          # Llama-2-7b-chat is gated; or export HF_TOKEN=...
+export HF_HOME=$PWD/hf_cache   # jobs_sweep.sh sets this itself; needed for a login-node run
+```
+
+**Watching a submitted sweep.** The plan is printed in the first few lines of the log, so a `--dry` you forgot to run is still recoverable from the head of the output:
+
+```bash
+squeue -u $USER                                  # is it queued or running?
+tail -f logs/sweep_<jobid>.out                   # the plan, then one block per run
+head -40 logs/sweep_<jobid>.out                  # provenance + the plan it committed to
+wc -l results/greedy/sweep.csv                   # progress: one row per (config, ratio)
+scancel <jobid>                                  # stop it; the CSV keeps completed rows
+sacct -j <jobid> --format=JobID,State,Elapsed,MaxRSS,ReqTRES   # what it actually used
+```
+
+A killed or timed-out job keeps whatever it had finished: rows are checkpointed to `results/<type>/sweep.csv` as each run completes, and the CSV is appended to across invocations. **There is no resume** — a resubmitted preset re-runs the whole plan from the start, so to pick up where a wall-clock kill landed, narrow the flags by hand to the configurations the CSV is missing. Every row carries its own `run_id` and full configuration, so the partial and the continuation stay distinguishable.
+
+**Collecting results** back from the cluster:
+
+```bash
+rsync -av 23EC10068@master:~/kvcache/ACSA-Project/results/ ./results/
+rsync -av 23EC10068@master:~/kvcache/ACSA-Project/logs/ ./logs/
+```
+
+Figures are rendered only by the run that produced the results (`--plots`, in-memory); there is no CSV → figure path, so a sweep whose plots you want must be launched with `--plots` set.
 
 ### The coarse sweep grids
 
