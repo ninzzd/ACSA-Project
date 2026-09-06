@@ -191,30 +191,225 @@ Both are parameters (`score_length_bits`, `score_frac_bits`, plus `score_signed`
 - **Group-wise scales.** Min/max are now taken per group of `group_size` consecutive channels (default `head_dim / 2`, i.e. 2 groups of 64) instead of once per whole 128-d vector. One outlier channel no longer stretches the scale for the entire head — the dominant source of error at $N = 2$.
 - **`bits >= 16` short-circuits** to the identity, so a 16-bit "LOW" bucket is a true no-op rather than a lossy round-trip through a 65535-level grid.
 
+### Code Layout
+
+`scripts/mikv.py` used to be one ~3600-line file. It is now the command line and nothing else, over eight modules — split so the policy can be read without the sweep and vice versa. Entry point and all commands are unchanged: `python scripts/mikv.py`.
+
+| module | lines | what it holds |
+|---|---|---|
+| `mikv.py` | ~350 | argparse, preset/flag merge, `--dry-run`, the `main` block |
+| `mikv_runtime.py` | ~40 | **import-order bootstrap** (see below) |
+| `mikv_config.py` | ~215 | every constant the policy is parameterized by, plus the name↔knob helpers (`high_precision_knobs`, `format_score_tag`) |
+| `mikv_quant.py` | ~170 | the quantizers only: affine (K/V, scoreboard) and fixed-point with a static scale |
+| `mikv_policy.py` | ~725 | `load_model`, `MiKVPolicy`, the attention monkey-patch, the generation loop |
+| `mikv_bench.py` | ~410 | Line Retrieval, the no-quant baseline, KV footprint bytes |
+| `mikv_sweep.py` | ~985 | `SweepPoint`, axis enumeration, the three walks, the driver |
+| `mikv_grids.py` | ~235 | **the knobs you edit**: coarse value lists + presets |
+| `mikv_report.py` | ~495 | grouping, markdown tables, the results CSV |
+| `mikv_plots.py` | ~370 | figures; not imported at all unless `--plots` |
+
+The import graph is a clean DAG — `runtime → config → {quant, grids} → policy → bench → sweep`, with `report` off `config` and `plots` off `report` — verified acyclic.
+
+**`mikv_runtime.py` exists because two import orderings are load-bearing**, and both fail as a bare segfault with no Python traceback. `HF_HUB_DISABLE_XET=1` must be set before `transformers`/`huggingface_hub` import (it is read once at import time), and `torch`/`transformers` must import before `matplotlib.pyplot` (a native-library symbol conflict; whichever loads first wins). In a single file that was two comments and a fixed line order; across modules it would have been a latent trap, so it is enforced in one place that everything else imports. `mikv_plots.py` imports it first with a `# noqa` and a note.
+
+**Two consequences of the split worth knowing.** Names that were private but are now crossed between modules got a public spelling — `_score_tag` → `format_score_tag`, `_configs_in` → `configs_in`, `_pareto_front` → `pareto_front`, and so on; the genuinely module-internal ones (`_axis_values`, `_greedy_sweep`, `_build_arg_parser`) kept their underscore. And `mikv_plots` is now a **lazy import** inside the `--plots` branch, so a sweep run never pays matplotlib's import cost or its failure modes.
+
 ### Running
 
+`scripts/run_sweep.sh` is the way in — it names a preset, gives that preset its own results directory, prints the plan before spending anything, and can detach a multi-hour run. It forwards every unrecognised flag to `mikv.py` verbatim, so nothing is hidden behind it.
+
 ```bash
-python scripts/mikv.py
+./scripts/run_sweep.sh list                     # the sweep types (read out of mikv_grids.py)
+./scripts/run_sweep.sh greedy --dry             # cost it; loads no model, touches no GPU
+./scripts/run_sweep.sh greedy                   # the recommended pass: 54 runs, ~3 h
+./scripts/run_sweep.sh greedy --bg              # same, detached; prints the log to tail
+./scripts/run_sweep.sh ofat                     # controlled marginals off a fixed baseline
+./scripts/run_sweep.sh confirm                  # the follow-up grid, once you know what matters
+./scripts/run_sweep.sh greedy --help            # every mikv.py flag
 ```
 
-No CLI args — sweep parameters are set in the `__main__` block, which calls `sweep_kv_compression`. Logs to `mikv_run_<timestamp>.log` (stdout+stderr tee'd).
+**Always `--dry` first.** A sweep is GPU-hours and the plan is free; the plain form prints the plan and asks for confirmation anyway, and every axis flag below changes the count. Results land in `results/<type>/sweep.csv`, appended as each run completes. `PYTHON` and `RESULTS_DIR` override the interpreter and the output root.
 
-**What the default sweep runs.** 2 budget modes × 2 balancers × 3 budget ratios = **12 benchmark runs**, plus the no-quant baseline. The scoreboard axes (`score_schemes`, `score_decay_schemes`, `score_decay_applications`) each default to a single value and are **not** swept — each would multiply the run count again — with commented opt-in lines in `__main__`, including a one-liner for the IPU score-path configuration.
+Narrowing a preset is the normal way to make a grid affordable — a flag replaces one axis and leaves the rest:
 
-**Results CSV** (`write_results_csv`, default `docs/kv_compression_sweep.csv`) — **appends**, so results accumulate across invocations. 33 columns, one row per (budget mode, balancer, scoreboard config, ratio), each row carrying the full configuration that produced it:
+```bash
+# the confirmation grid, cut to the two axes a greedy pass said mattered
+./scripts/run_sweep.sh confirm --low-bits 2,4 --window-tokens 32,64 --dry
+
+# does the ROM depth matter at all, holding everything else at the reference design?
+./scripts/run_sweep.sh ofat --age-lut-entries 128,256,512 --dry
+
+# the two footprint-free axes crossed properly: same KV size at every point
+./scripts/run_sweep.sh score --dry
+
+# a one-off configuration, no preset semantics
+./scripts/run_sweep.sh legacy --sweep-mode grid \
+    --high-tiers fp16 --low-bits 2 --window-tokens 64 \
+    --score-schemes fixed --score-length-bits 14 --score-frac-bits 4 \
+    --score-decay-schemes lut --age-lut-entries 512 --dry
+```
+
+`mikv.py` can also be called directly when you do not want the per-type results directory:
+
+```bash
+python scripts/mikv.py --dry-run                            # default preset (greedy)
+python scripts/mikv.py --preset confirm --csv out.csv
+python scripts/mikv.py --low-bits 2,4 --high-tiers fp16,int8 --sweep-mode grid
+python scripts/mikv.py --preset greedy --plots              # render the figures too
+```
+
+What each preset costs, at the observed 3.5 min/run on a V100:
+
+| preset | configurations | runs | wall time | what it is for |
+|---|---|---|---|---|
+| `greedy` *(default)* | 18 | 54 | ~3.1 h | the recommended first pass — coordinate descent |
+| `ofat` | 18 | 54 | ~3.1 h | the same budget as controlled marginals |
+| `score` | 48 | 144 | ~8.4 h | balancer × scoreboard × ROM depth, all at one footprint |
+| `budget` | 54 | 162 | ~9.4 h | mode × r × w × HIGH × LOW — read off the Pareto front |
+| `confirm` | 72 | 216 | ~12.6 h | the second pass; narrow it with the flags first |
+| `legacy` | 4 | 12 | ~0.7 h | the historical sweep, kept reproducible by name |
+| `exhaustive` | 2304 | 6912 | **~16.8 d** | to be costed with `--dry`, not launched |
+
+Logs to `mikv_run_<timestamp>.log` (stdout+stderr tee'd), or to `results/<type>/run_<timestamp>.log` under `--bg`. **Plotting is off by default** — the CSV and the tables are the sweep's product and the figures regenerate from them, so a matplotlib error must not be able to take down a finished sweep; pass `--plots` to render them.
+
+### The coarse sweep grids
+
+All value lists live together near the top of the file, so a preset, a CLI run and this doc cannot disagree about what "the scoreboard sweep" means.
+
+| grid | constant | values |
+|---|---|---|
+| scoreboard | `SCOREBOARD_SWEEP` | 8: `fp32`, `fp16` (native), and fixed-point at (l=14, f=2/4/6) and (l=30, f=12/16/20), all unsigned |
+| budget mode | `BUDGET_MODE_SWEEP` | `fixed_length`, `fixed_ratio` |
+| budget ratio r | `BUDGET_RATIO_SWEEP` | 0.25, 0.5, 0.75 |
+| LOW tier | `LOW_TIER_SWEEP` | int2, int3, int4 |
+| HIGH tier | `HIGH_TIER_SWEEP` | int8, int16, fp16 |
+| window w | `WINDOW_SWEEP` | 32, 64, 128 **tokens** |
+| balancer | `BALANCER_SWEEP` | `paper` (sqrt), `pow2` |
+| age LUT depth | `AGE_LUT_SWEEP` | 128, 256, 512 entries (256 B / 512 B / 1 KB) |
+
+Four things about these are load-bearing:
+
+**The scoreboard is ONE composite axis, not four crossed.** Its four fields (scheme, word length l, fraction f, signedness) only make sense together, and the legal settings are a list, not a product — crossing l and f independently enumerates `l=14, f=16`, which has no integer bits and gets dropped, alongside `l=30, f=2`, which nobody would build. `enumerate_sweep_points` accepts an axis whose values are *dicts of field assignments* for exactly this; `SCOREBOARD_SWEEP` is that list. The 2 MSBs of the stored word are tier flags (HIGH / LOW / MIGRATING), which is why a 16-bit word leaves l = 14 and a 32-bit one leaves l = 30, and why all of them are unsigned: the score is a sum of softmax weights, provably non-negative, so a sign bit would be a wasted bit of range.
+
+**Choosing f is a range-vs-resolution trade against a running sum.** The integer field has to hold the largest score a sink token accumulates (up to ~t, so ~12 integer bits at a 4096-token context) while the fraction has to resolve one step's attention delta or that token's score never moves at all. At l = 14 the word is genuinely *tight* — f = 6 leaves 8 integer bits and will saturate on sinks, f = 2 leaves 12 but flushes small deltas — which is the point: that is the row that halves the score SRAM. At l = 30 only f = 20 is anywhere near the edge, and it is in the list to bracket where saturation starts to bite.
+
+**w is now an absolute token count, not a fraction of k.** `window_tokens` (32/64/128) is what `MiKVPolicy.budget_for` reads when set; `window_ratio` remains as the legacy alternative and is used only when it is not. The window protects the tail of the context, and how many tokens that takes has nothing to do with how large k happens to be. It is still carved *out of* the budget and clamped to k — `k_H = k − w`, never `k + w` — so on a short prompt at r = 0.25 the widest window can meet or exceed k and degenerate to pure recency. That is a real result, not a misconfiguration, and the axis-effects table will show it as such.
+
+**int16 and fp16 are genuinely different.** `quantize_kv` now short-circuits at `bits > 16` rather than `>= 16`, so `bits=16` is a real affine round-trip: a uniform grid over the group's [min, max] against fp16's logarithmic one. The two agree near the group maximum — where fp16's spacing, `max·2⁻¹¹`, is the *coarser* of the two — and diverge on small-magnitude channels, where a uniform `(max−min)/65535` step is far coarser than fp16 resolves. Native fp16 is reached by not calling the quantizer at all, not by passing bits=16. (`quantize_scores` keeps its own `>= 16` guard, so nothing about the scoreboard changed.)
+
+### The age LUT (`ipu_age_lut`)
+
+The decay factor multiplied into the scoreboard before the argmin is `1/age`. A hardware divider is iterative and multi-cycle, and the score path needs P = 16 of them retiring one beat per cycle, so the divide is replaced by a reciprocal ROM and a multiply: `R[a] = round(2^F / n)`, `cmp_val = (S * R) >> F`. Depth is now a sweep axis (`--age-lut-entries`), read only when `score_decay_scheme="lut"` and collapsed to a single point otherwise.
+
+**The previous model was wrong, and not by a little.** It indexed the table directly by age and **clamped** everything past the end, so every token older than the table shared one decay factor. The design in the brief **folds** instead, exploiting the self-similarity of `1/n` under powers of two — there is no entry for 1000 because 1000 is 500 doubled and `1/1000` is `1/500` halved — so the table covers one octave and larger ages are halved until they land back inside, with the halving absorbed into the output shift. Measured worst-case error over ages 65–4096:
+
+| depth | clamp (old model) | fold (implemented) |
+|---|---|---|
+| 128 | 1462% | **0.53%** |
+| 512 | 290% | **0.19%** |
+
+**`F` is derived, not chosen.** It is bounded by the largest stored entry, which sits at the *smallest* age the ROM can see — and that is not age 1. The recency window guarantees no token younger than `W` reaches the comparator, so `n_min = W + 1` and `F = floor(log2((2^B − 1) · n_min))`. At B = 16, W = 64 that is **F = 22** rather than the 15 a table starting at age 1 would allow: seven extra fractional bits out of a masking rule that already existed. Since `w` is itself a swept axis, the policy passes its own configured window, and F moves with it (21 / 22 / 23 at w = 32 / 64 / 128).
+
+**The implementation is validated against the brief's own numbers.** ROM spot values (`R[0]=64528`, `R[63]=32768`, `R[511]=7282`), the monotonicity and no-adjacent-duplicates assertions the RTL testbench makes, the age-3000 worked example, and all five rows of the error table — 0.516/0.309/0.175/0.096/0.058% worst case at depths 128–2048 — reproduce exactly.
+
+Two things the sweep has to know about this axis:
+
+**It models the whole comparator path, not just the ROM.** `age_lut_cmp_val` shifts the *product* (`(S·R) >> (F+e)`, never `S · (R >> e)`, which would discard up to 4 of the ROM word's 16 bits) and rounds onto the comparator's own fixed-point output word. That second rounding is the larger error source — the brief measures ~1.2% victim disagreement at *every* depth from 128 to 2048 from output quantization alone, against ~0.07% from the reciprocal at depth 512. Modelling the ROM in isolation would misattribute the error and make depth look far more decisive than it is. Since the point of sweeping depth is to find where it stops mattering, the floor has to be in the model.
+
+**Depth and window interact, and the sweep enforces it.** The fold halves an age until it is at or below the table top `W + D`, so the smallest address it can generate sits just above `(W + D)/2`; for that to remain inside the table needs **`D ≥ W + 2`**. `w = 128` with a 128-deep ROM violates this — the fold undershoots and the address clamps, silently flattening the decay for the oldest tokens. `SweepPoint.invalid_reason` drops that combination from the plan with a printed reason rather than producing quiet garbage. It is a real constraint on the design (deepen the ROM or narrow the window), not a modelling artifact.
+
+There is **no knee to find** in the depth curve: accuracy-per-byte is a straight line on log-log, so doubling the ROM halves the error forever and a depth is chosen against a budget rather than by locating a bend. The budget here is the output-quantization floor above.
+
+### Profiling scheme
+
+An exhaustive pass over these grids — now including the 3 LUT depths — is **2304 configurations × 3 ratios = 6912 runs ≈ 16.8 days** of continuous V100 time at 3.5 min/run (288 of the 2592 raw combinations are dropped by the `D ≥ W + 2` rule). The `exhaustive` preset exists to be costed with `--dry-run`, not launched.
+
+The split that makes a cheaper pass sound is structural, and the code encodes it as `FOOTPRINT_AXES`:
+
+- **Footprint-free axes** — balancer, scoreboard, decay. They change only *which* tokens are kept and how faithfully they are ranked, never how many, so every candidate sits at an identical KV size and **accuracy alone is the right criterion**. A cheaper value that holds accuracy is free in area terms. These decisions are unambiguous.
+- **Footprint axes** — budget mode, r, w, HIGH, LOW. More cache is always at least as accurate, so maximizing accuracy here just walks to the largest configuration. There is no single "best": the answer is the **Pareto front**.
+
+The three schemes, cheapest first:
+
+| `--sweep-mode` | preset | cost | what it gives you |
+|---|---|---|---|
+| `ofat` | `ofat` | 18 cfg → **54 runs (~3 h)** | Each axis moved one value off a fixed baseline. A clean, *controlled* marginal per knob — blind to interactions. |
+| `greedy` | `greedy` | ≤18 cfg → **≤54 runs (~3 h)** | Coordinate descent: sweep an axis, keep its winner, move on. Same cost as OFAT, but each axis is decided against the winners of the ones before it, so it recovers some interaction structure for free. |
+| `grid` | `exhaustive` | 2304 cfg → **6912 runs (~16.8 d)** | Everything, including interactions. Not affordable. |
+
+**Recommended: `greedy` (the default), then a targeted `grid` to confirm.** `GREEDY_AXIS_ORDER` settles the footprint-free axes **first** — that ordering is the whole design. Those decisions are unambiguous and cheap to trust, and they carry into every axis afterwards; only then does the walk spend anything on axes that trade accuracy for cache, scoring those on accuracy-per-byte (`_greedy_objective_value`, `greedy_objective="auto"`).
+
+Two honest limits, stated because greedy's answer looks more authoritative than it is:
+
+1. It finds a **local** optimum along the path it walked. It cannot see an interaction that only pays off in a direction it already walked away from, and a different axis order can land somewhere else. Treat the result as a strong candidate, not the optimum — hence the `confirm` preset (216 runs, ~12.6 h), narrowed with the CLI flags to whichever axes actually moved accuracy.
+2. `accuracy_per_byte` is a **crude scalarization** of a genuine two-objective problem. It exists so the walk can proceed. For the footprint axes, read the Pareto-front table, not the value greedy picked.
+
+So: `greedy` (~3 h) → read the axis-effects table for which knobs moved → `confirm` narrowed to those (~half a day) → pick off the Pareto front. Under 24 h of V100 time total, against 16.8 days for the exhaustive grid.
+
+### The runner
+
+`scripts/run_sweep.sh` (commands under [Running](#running)) adds three things to a bare `mikv.py` invocation, all of them about not losing a long run:
+
+**One results directory per sweep type.** `results/<type>/sweep.csv`. The CSV is *appended* to by design, so without this a greedy pass and a confirmation grid land in one file with nothing but `run_id` to tell them apart. Every row still carries its own `run_id` and full configuration, so this is convenience rather than correctness.
+
+**The plan is always printed first**, and an interactive invocation confirms before starting. `--dry` stops there. The check is guarded by `[ -t 0 ]`, so a redirected or CI invocation runs without blocking on a prompt.
+
+**`--bg` detaches** with `nohup` and prints the log path, so a multi-hour sweep survives a dropped SSH connection.
+
+Rows are appended to the CSV **as each run completes** (`checkpoint_csv`, on by default; `--no-checkpoint` to disable), so a sweep that dies at run 60 of 63 keeps the first 59.
+
+The preset list the script validates against is read out of `mikv_grids.py` with `sed`, not by importing it — importing pulls in `mikv_config` → torch + transformers, which is ~10 s of load time to print a list of seven names. `mikv.py --help` remains the authoritative list.
+
+### Sweep mechanics
+
+Every axis takes a comma-separated list and has a CLI flag. A flag overrides one axis of the chosen preset and leaves the rest (and un-pins that axis from a greedy/OFAT baseline, so the values asked for are actually swept). `--dry-run` prints the resulting plan without loading the model.
+
+| flag | axis | accepted values |
+|---|---|---|
+| `--budget-modes` | budget mode | `fixed_length`, `fixed_ratio` |
+| `--budget-ratios` | r | floats in (0, 1] |
+| `--balancers` | channel balancer | `paper`, `pow2` |
+| `--window-tokens` | w, absolute | integers (32, 64, 128) |
+| `--window-ratios` | w as a fraction of k | floats in [0, 1] — legacy, read only when `--window-tokens` is unset |
+| `--high-tiers` | HIGH storage | `fp16`, `int16`, `int8`, `int4` |
+| `--low-bits` | LOW storage | integers (2, 3, 4) |
+| `--score-schemes` | scoreboard | `fp32`, `native`, `quant`, `fixed` |
+| `--score-bits` | scoreboard affine width | integers — read only under `quant` |
+| `--score-length-bits` | scoreboard word length l | integers (14, 30) — read only under `fixed` |
+| `--score-frac-bits` | scoreboard fraction f | integers — read only under `fixed`, must leave integer bits |
+| `--score-signed` | scoreboard signedness | `0`/`1` — read only under `fixed` |
+| `--score-decay-schemes` | age decay | `exact`, `quant`, `pow2`, `lut` |
+| `--score-decay-applications` | how decay is applied | `ranking`, `compounding` |
+| `--age-lut-entries` | ROM depth D | integers (128, 256, 512) — read only under `--score-decay-schemes lut`, and constrained by `D >= w + 2` |
+
+Plus `--sweep-mode {grid,ofat,greedy}` and `--greedy-objective` to override the walk a preset chose, `--num-samples`/`--num-records`/`--max-tokens`/`--seed`/`--model` for the benchmark itself, and `--csv`/`--plot`/`--plots`/`--no-checkpoint` for output.
+
+`high_tiers` folds the old `high_bits` + `high_precision_native` pair into **one** named axis (`HIGH_TIER_MODES`, mapped back by `high_precision_knobs`): the two are not independent — `high_bits` is unread while the native flag is set — so crossing them would run identical configurations twice.
+
+Two guards keep an over-broad sweep from wasting GPU time. `SweepPoint.canonical` collapses configurations that are **the same experiment**: an unread `score_bits` under a non-quantized scheme, the (l, f, signed) triple under a non-fixed one, `window_ratio` once `window_tokens` is set, and the *entire* score path when w = k, since k_H = 0 makes `_importance_set` return the pure recency mask without ever consulting the scoreboard. `SweepPoint.invalid_reason` drops impossible points from the plan **with a printed reason** rather than raising hours in — an (l, f) pair with no integer bits, a HIGH tier coarser than the LOW one, a ratio out of range. `extra_points` covers what neither walk reaches: combinations only valid *together*.
+
+**Results CSV** (`write_results_csv`, default `docs/kv_compression_sweep.csv`) — **appends**, so results accumulate across invocations. 35 columns, one row per (configuration, ratio), each row carrying the full configuration that produced it:
 
 | group | columns |
 |---|---|
 | identity | `timestamp`, `run_id` (shared by every row of one sweep), `model_name` |
-| policy | `budget_mode`, `scheme`, `ratio`, `window_ratio`, `high_bits`, `low_bits`, `high_precision_native` |
+| policy | `budget_mode`, `scheme`, `ratio`, `window_tokens`, `window_ratio`, `high_bits`, `low_bits`, `high_precision_native` |
 | scoreboard | `score_scheme`, `score_bits`, `score_decay_scheme`, `score_decay_application`, `score_length_bits`, `score_frac_bits`, `score_signed` |
-| hardware model | `hw_delta_bits`, `hw_age_lut_entries` — recorded, not parameterized, so a row stays interpretable if those constants are ever retuned |
-| run | `num_samples`, `num_records`, `max_tokens`, `seed`, `t_p` |
+| hardware model | `hw_delta_bits` (recorded, not parameterized), `hw_age_lut_entries` (now a **swept axis** — the ROM depth that produced the row) |
+| run | `sweep_mode`, `num_samples`, `num_records`, `max_tokens`, `seed`, `t_p` |
 | results | `k`, `seq_len`, `accuracy`, `baseline_accuracy`, `kv_size_before`, `kv_size_after`, `compression_pct`, `avg_seq_len`, `kv_bytes_occupied` |
 
 Columns irrelevant to a row are left empty (a `native` row has no `score_length_bits`). Two guards: keys outside the fixed column list are dropped rather than shifting the alignment, and a file whose header does not match is **left untouched** while the rows divert to `<stem>_<run_id>.csv` with a warning — a sweep is hours of GPU time and must not lose results to a header mismatch. A row with no `score_decay_application` column predates that column and is read back as `compounding`, so legacy rows are not silently relabelled as today's policy.
 
-**Plots** (`plot_accuracy_vs_compression`) — one figure per (budget mode, balancer, scoreboard precision) plus a combined overlay, named `kv_compression_sweep_<mode>_<balancer>[_<scoretag>].png`. The scoreboard tag appears only when more than one is present, so a default sweep keeps the same filenames it always had. Tags identify a configuration compactly: `native`, `quant8+decaypow2`, `fixed30.16+decaylut`, `fixed14.8u`.
+**Tables** (`format_results_table`) — one section per configuration, then three cross-cutting summaries that only appear once something varies. *Axis effects*: per axis value, the run count, mean/best accuracy and **mean KV size** — the last column is what says whether that axis was compared at equal cost (balancer, scoreboard) or not (r, w, the bit widths). *Balancer head-to-head*: accuracy per balancer keyed on every *other* varying axis plus r, so only rows at an identical footprint under an identical policy are put side by side. *Pareto front*: the rows nothing else beats on both footprint and accuracy — the shortlist a hardware configuration should be picked from, since everything off it is strictly dominated by something in the same sweep. Only axes that actually varied are named anywhere, so a single-configuration sweep renders as compactly as it always did.
+
+**Plots** — three figures, all of which only name the axes that varied:
+
+- `plot_accuracy_vs_compression` → one figure per configuration plus a combined overlay, named `kv_compression_sweep_<mode>_<balancer>[_<axis slugs>].png`. A default sweep keeps the filenames it always had. Past `MAX_PER_CONFIG_FIGURES` (12) configurations the per-configuration figures are skipped by default (`per_config=True` forces them) and the overlay facets into several numbered figures of ≤ 8 series each, sorted best-accuracy-first — hues are never cycled, so a repeated colour never means two different configurations.
+- `plot_axis_effects` → `..._axes.png`, one panel per varying axis: mean accuracy per value with the individual runs as dots behind it. The flat panel is a knob the hardware can choose freely; the tall step is where accuracy is being spent.
+- `plot_pareto` → `..._pareto.png`, every run in (footprint, accuracy) with the front drawn and labelled.
+
+Scoreboard tags identify a configuration compactly: `native`, `quant8+decaypow2`, `fixed30.16+decaylut`, `fixed14.8u`.
 
 ### torch / transformers Integration
 
