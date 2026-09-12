@@ -152,6 +152,7 @@ def run_line_retrieval_benchmark(
     age_lut_entries: int = HW_AGE_LUT_ENTRIES,
     max_tokens: int = 4096,
     seed: int = 0,
+    evict: bool = False,
 ) -> float:
     """
     Line Retrieval accuracy under the MiKV cache policy (paper Figure 3b /
@@ -179,7 +180,7 @@ def run_line_retrieval_benchmark(
         f"fixed_point=({int(score_signed)},{score_length_bits},{score_frac_bits}) "
         f"budget_ratio={budget_ratio} "
         f"window={'w=' + str(window_tokens) if window_tokens is not None else 'ratio ' + str(window_ratio)} "
-        f"high_bits={high_bits} low_bits={low_bits} "
+        f"high_bits={high_bits} low_bits={'evict' if evict else low_bits} "
         f"high_precision_native={high_precision_native}",
         flush=True,
     )
@@ -211,6 +212,7 @@ def run_line_retrieval_benchmark(
             score_frac_bits=score_frac_bits,
             score_signed=score_signed,
             age_lut_entries=age_lut_entries,
+            evict=evict,
         )
         continuation = tokenizer.decode(generated[0, prompt_len:], skip_special_tokens=True)
         predicted = _extract_number(continuation)

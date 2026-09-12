@@ -173,6 +173,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                           "sides of the compression ratio are computed at")
     run.add_argument("--seed", type=int, default=0)
     run.add_argument("--model", default=MODEL_NAME)
+    run.add_argument("--evict", action="store_true",
+                     help="H2O-style hard eviction baseline: positions outside the "
+                          "importance set are masked out of attention entirely instead "
+                          "of being demoted to --low-bits. Applies to the whole run, not "
+                          "per configuration -- --low-bits is still accepted (needed for "
+                          "the high_tier-vs-low_bits validity check) but has no effect on "
+                          "the result under this flag.")
 
     out = parser.add_argument_group("output")
     out.add_argument("--csv", default="docs/kv_compression_sweep.csv")
@@ -246,6 +253,7 @@ def sweep_kwargs_from_args(args) -> dict:
         num_records=args.num_records,
         max_tokens=args.max_tokens,
         seed=args.seed,
+        evict=args.evict,
     )
     if not args.no_checkpoint:
         kwargs["checkpoint_csv"] = args.csv

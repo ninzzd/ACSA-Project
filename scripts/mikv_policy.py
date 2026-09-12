@@ -84,6 +84,15 @@ from mikv_quant import (
     quantize_scores,
 )
 
+# Query positions per block in the prefill score reduction. A host memory knob,
+# not a hardware parameter: the reduction is mathematically one sum over all
+# queries either way. It exists because the fixed-point path quantizes every
+# softmax value individually, so a whole [batch, kv_heads, groups, t_p, t_p]
+# attention tensor would otherwise be converted in one allocation -- ~0.8 GB of
+# fp64 per layer at t_p = 1800, on a card that has under 2 GB free once the model
+# and its KV cache are resident.
+PREFILL_SCORE_CHUNK = 256
+
 
 def load_model(model_name: str = MODEL_NAME):
     print(f"[load_model] device={DEVICE} dtype={DTYPE}", flush=True)
@@ -157,6 +166,7 @@ class MiKVPolicy:
         score_frac_bits: int = HW_SCORE_FRAC_BITS,
         score_signed: bool = HW_SCORE_SIGNED,
         age_lut_entries: int = HW_AGE_LUT_ENTRIES,
+        evict: bool = False,
     ):
         if balance_scheme not in BALANCE_SCHEMES:
             raise ValueError(f"balance_scheme must be one of {BALANCE_SCHEMES}, got {balance_scheme!r}")
@@ -194,6 +204,14 @@ class MiKVPolicy:
         self.score_frac_bits = score_frac_bits
         self.age_lut_entries = age_lut_entries
         self.score_signed = score_signed
+        # H2O-style hard eviction, as an alternative to demoting the LOW set to
+        # `low_bits`: positions outside the importance set S are masked out of
+        # every future attention row (an additive -inf bias, applied in
+        # `_mikv_attention_forward`) instead of being kept around at reduced
+        # precision. `low_bits` is accepted but never read once this is set --
+        # see `quantize_prefill`/`demote_decode` -- so a sweep can still carry a
+        # nominal low_bits value through its grid without it doing anything.
+        self.evict = evict
 
         self.phase = "prefill"
         self.k = self.w = self.k_H = None
@@ -361,8 +379,17 @@ class MiKVPolicy:
 
         high_mask = s.unsqueeze(-1)
         layer = cache.layers[layer_idx]
-        layer.keys[:] = torch.where(high_mask, self._quantize_high(k_bal), quantize_kv(k_bal, bits=self.low_bits))
-        layer.values[:] = torch.where(high_mask, self._quantize_high(v), quantize_kv(v, bits=self.low_bits))
+        if self.evict:
+            # Nothing to quantize: positions outside S are about to be masked
+            # out of every future attention row (see `_mikv_attention_forward`),
+            # so whatever is stored for them is never read. Leave them at
+            # whatever precision they arrived at rather than paying for a
+            # quantize call whose result cannot affect the output.
+            layer.keys[:] = torch.where(high_mask, self._quantize_high(k_bal), k_bal)
+            layer.values[:] = torch.where(high_mask, self._quantize_high(v), v)
+        else:
+            layer.keys[:] = torch.where(high_mask, self._quantize_high(k_bal), quantize_kv(k_bal, bits=self.low_bits))
+            layer.values[:] = torch.where(high_mask, self._quantize_high(v), quantize_kv(v, bits=self.low_bits))
 
     def demote_decode(self, layer_idx, cache):
         state = self._state(layer_idx)
@@ -371,12 +398,62 @@ class MiKVPolicy:
         # sticky: only demote, and only positions not already demoted
         fell_out = state.in_s & ~s & ~state.demoted
         if fell_out.any():
-            layer = cache.layers[layer_idx]
-            mask = fell_out.unsqueeze(-1)
-            layer.keys[:] = torch.where(mask, quantize_kv(layer.keys, bits=self.low_bits), layer.keys)
-            layer.values[:] = torch.where(mask, quantize_kv(layer.values, bits=self.low_bits), layer.values)
+            if not self.evict:
+                layer = cache.layers[layer_idx]
+                mask = fell_out.unsqueeze(-1)
+                layer.keys[:] = torch.where(mask, quantize_kv(layer.keys, bits=self.low_bits), layer.keys)
+                layer.values[:] = torch.where(mask, quantize_kv(layer.values, bits=self.low_bits), layer.values)
+            # Under eviction, `state.demoted` alone is what matters from here:
+            # `_mikv_attention_forward` turns it into an attention mask before
+            # the next step, so no write to the K/V tensors is needed at all.
             state.demoted = state.demoted | fell_out
         state.in_s = s
+
+    # ---- hard eviction (evict=True): mask instead of demote ----
+
+    def eviction_bias(self, layer_idx, seq_len: int, num_kv_groups: int, dtype) -> torch.Tensor | None:
+        """
+        Additive attention bias that removes every evicted position from every
+        future attention row -- the actual effect of H2O-style eviction (the
+        KV pair is gone), reproduced without resizing any tensor: a demoted
+        position gets -inf added to its score before the softmax, so its
+        attention weight comes out at exactly 0 regardless of what is stored
+        in `layer.keys`/`layer.values` there.
+
+        Returns None when nothing has been demoted yet (prefill's own
+        attention, and every step before the first demotion), so the caller
+        can skip touching `attention_mask` at all in the common case.
+        """
+        state = self._state(layer_idx)
+        if state.demoted is None or not bool(state.demoted.any()):
+            return None
+        batch, num_kv_heads, t = state.demoted.shape
+        demoted = state.demoted
+        if t < seq_len:
+            # The position(s) just appended this step haven't been through
+            # `write_new_token`'s bookkeeping yet when this is read (see
+            # `_mikv_attention_forward`), so pad with "not demoted" -- a
+            # freshly written token is always inside the recency window and
+            # can never be evicted at the moment of its own creation.
+            pad = torch.zeros(
+                batch, num_kv_heads, seq_len - t, dtype=torch.bool, device=demoted.device
+            )
+            demoted = torch.cat([demoted, pad], dim=-1)
+        neg_inf = torch.finfo(dtype).min
+        bias = torch.zeros(demoted.shape, dtype=dtype, device=demoted.device)
+        bias = bias.masked_fill(demoted, neg_inf)              # [batch, num_kv_heads, seq_len]
+        bias = bias.repeat_interleave(num_kv_groups, dim=1)     # [batch, num_heads, seq_len]
+        return bias.unsqueeze(2)                                 # [batch, num_heads, 1, seq_len]
+
+    def apply_eviction_mask(self, layer_idx, attention_mask, seq_len: int, num_kv_groups: int, dtype):
+        """`attention_mask` with evicted positions added in, or `attention_mask`
+        unchanged if nothing is evicted yet. Broadcasts against the causal mask
+        the model already built (both are additive), so this composes with it
+        rather than replacing it."""
+        bias = self.eviction_bias(layer_idx, seq_len, num_kv_groups, dtype)
+        if bias is None:
+            return attention_mask
+        return bias if attention_mask is None else attention_mask + bias
 
     def _importance_set(self, a: torch.Tensor) -> torch.Tensor:
         """a: [batch, num_kv_heads, t] accumulated scores -> boolean membership mask, same shape."""
@@ -471,7 +548,20 @@ class MiKVPolicy:
             # and only then reduce. Simplification: the reduction runs at full width
             # and saturates once at the end, where the hardware saturates per add --
             # they differ only for a score that actually reaches the rail.
-            summed = self._ingress_delta(w).sum(dim=(2, 3))
+            # Blocked over query positions, and the accumulation dtype pinned.
+            # Both are memory, not model: the sum over (groups, queries) is the
+            # same sum in any order, and fp64 is pinned because ingress is a
+            # 17-bit word that quantize_fixed_point returns in fp32, while
+            # summing up to t_p such terms in fp32 would drift past the l = 30
+            # accumulator's own LSB. A reduction with an explicit dtype promotes
+            # its input first rather than accumulating on the fly, so the cast is
+            # a real allocation and only the blocking keeps it small.
+            summed = torch.zeros(
+                batch, self.num_kv_heads, t_p, dtype=torch.float64, device=w.device
+            )
+            for start in range(0, t_p, PREFILL_SCORE_CHUNK):
+                block = w[:, :, :, start : start + PREFILL_SCORE_CHUNK, :]
+                summed += self._ingress_delta(block).sum(dim=(2, 3), dtype=torch.float64)
         elif self.score_scheme == "fp32":
             summed = w.float().sum(dim=(2, 3))
         else:
@@ -595,6 +685,15 @@ def _mikv_attention_forward(
         # so this step's attention already sees the mixed-precision cache
         policy.write_new_token(layer_idx, past_key_values, key_states[:, :, -1:, :], value_states[:, :, -1:, :])
 
+    if policy.evict:
+        # Fold in the eviction mask *after* write_new_token, so `state.demoted`
+        # already covers the position just appended (never evicted at the
+        # moment of its own creation) and matches key_states' current length.
+        # A no-op during prefill and up until the first demotion happens.
+        attention_mask = policy.apply_eviction_mask(
+            layer_idx, attention_mask, key_states.shape[-2], num_kv_groups, query_states.dtype
+        )
+
     attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
         self.config._attn_implementation, eager_attention_forward
     )
@@ -654,6 +753,7 @@ def _generate_tokens_with_mikv(
     score_frac_bits: int = HW_SCORE_FRAC_BITS,
     score_signed: bool = HW_SCORE_SIGNED,
     age_lut_entries: int = HW_AGE_LUT_ENTRIES,
+    evict: bool = False,
 ) -> tuple[torch.Tensor, int]:
     """
     Manual autoregressive generation loop applying the MiKV KV cache
@@ -682,6 +782,7 @@ def _generate_tokens_with_mikv(
         score_frac_bits=score_frac_bits,
         score_signed=score_signed,
         age_lut_entries=age_lut_entries,
+        evict=evict,
     )
     _install_mikv_policy(model, policy)
 
@@ -736,6 +837,7 @@ def generate_with_mikv(
     score_frac_bits: int = HW_SCORE_FRAC_BITS,
     score_signed: bool = HW_SCORE_SIGNED,
     age_lut_entries: int = HW_AGE_LUT_ENTRIES,
+    evict: bool = False,
 ) -> str:
     generated, _ = _generate_tokens_with_mikv(
         model,
@@ -758,5 +860,6 @@ def generate_with_mikv(
         score_frac_bits,
         score_signed,
         age_lut_entries,
+        evict,
     )
     return tokenizer.decode(generated[0], skip_special_tokens=True)

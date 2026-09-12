@@ -29,6 +29,12 @@ from mikv_config import (
     HW_SCORE_FRAC_BITS,
 )
 
+# Significand width of the host float, not of any modelled register: the widest
+# fixed-point word fp32 can hold without rounding it a second time. Lives here
+# rather than in mikv_config because it is a property of IEEE-754, not a knob.
+FP32_MANTISSA_BITS = 24
+
+
 def quantize_kv(tensor: torch.Tensor, bits: int = 2, group_size: int | None = None) -> torch.Tensor:
     """
     Fake-quantize K/V vectors: round-trip them through a `bits`-wide affine
@@ -115,7 +121,7 @@ def quantize_fixed_point(
     Round `x` onto a fixed-point grid in the standard DSP format
     `(sign, length, fraction)` -- signedness, total word length, fraction length,
     as in MATLAB/Simulink `fixdt(1, l, f)` -- saturating at both rails. Returns
-    float64.
+    float64 for a word wider than fp32's mantissa, float32 otherwise.
 
         (1, l, f):  l bits total, of which 1 is the sign and f are fractional,
                     leaving l - 1 - f integer bits as a *derived* quantity, not a
@@ -138,15 +144,25 @@ def quantize_fixed_point(
     Saturating rather than wrapping, matching the `saturated?` flag
     ipu_accumulator carries out.
 
-    float64, not float32, is the container on purpose: a 30-bit fixed-point value
-    needs 30 bits of mantissa to round-trip, and fp32 has 24. Holding the model of
-    a 30-bit register inside fp32 would quietly add a second, un-modelled rounding
-    exactly at the LSB this scheme exists to study. Costs memory and speed, which
-    is part of why this scheme is opt-in.
+    The container is chosen by l, not fixed: a word of l bits needs l bits of
+    mantissa to round-trip, so anything above fp32's 24 -- the l = 30 accumulator
+    -- must be held in fp64. Holding the model of a 30-bit register inside fp32
+    would quietly add a second, un-modelled rounding exactly at the LSB this
+    scheme exists to study. At or below 24 bits -- the l = 17 ingress delta, the
+    l = 14 word -- fp32 is exact for the same values, so it is not a compromise
+    there, just half the memory and a faster reduction.
     """
     lo, hi = fixed_point_range(length_bits, frac_bits, signed)
     scale = float(2**frac_bits)
-    return torch.clamp(torch.round(x.double() * scale), lo * scale, hi * scale) / scale
+    dtype = torch.float64 if length_bits > FP32_MANTISSA_BITS else torch.float32
+    # One temporary, mutated in place, rather than one per operation. The naive
+    # expression allocates four full-size copies, and at prefill widths -- a
+    # t_p x t_p attention tensor, quantized elementwise before it is reduced --
+    # that is the difference between fitting on the card and an OOM the broken
+    # NVML on some nodes reports as an internal allocator assert. `copy=True`
+    # keeps the mutation off the caller's tensor when the dtype already matches.
+    q = x.to(dtype, copy=True).mul_(scale).round_().clamp_(lo * scale, hi * scale)
+    return q.div_(scale)
 
 
 def age_lut_frac_bits(

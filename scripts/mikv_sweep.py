@@ -705,6 +705,14 @@ def sweep_kv_compression(
     num_records: int = 20,
     max_tokens: int = 4096,
     seed: int = 0,
+    # H2O-style hard eviction for the whole sweep, as an alternative to
+    # demoting the LOW set to `low_bits_options`. Deliberately NOT one of the
+    # crossed axes below: a single job either models eviction or it doesn't,
+    # and `low_bits` is meaningless once positions are masked out of attention
+    # entirely rather than kept at reduced precision, so crossing the two would
+    # just re-run the same eviction experiment once per low_bits value. See
+    # `MiKVPolicy.evict` / `apply_eviction_mask`.
+    evict: bool = False,
     # --- the configuration axes. Every one is a tuple; a single-element tuple
     # holds that axis fixed, which is what the defaults below do for everything
     # the original sweep did not vary, so the default call still runs exactly the
@@ -942,18 +950,23 @@ def sweep_kv_compression(
             budget_ratio=ratio,
             max_tokens=max_tokens,
             seed=seed,
+            evict=evict,
             **kwargs,
         )
         # The footprint depends only on (seq_len, k, bit widths), so every
         # configuration sharing those sits at the same x -- which is the point:
         # the balancer and scoreboard axes are compared on accuracy at equal
         # compression, not on compression.
+        # Under eviction, the LOW set costs nothing (it isn't stored at all,
+        # not even at low_bits) -- pass low_bits=0 for this call only so the
+        # footprint reflects that, rather than reusing kwargs["low_bits"],
+        # which under evict=True is a nominal value the policy never reads.
         kv_size_after = kv_cache_size_bytes(
             model,
             seq_len,
             k=k,
             high_bits=kwargs["high_bits"],
-            low_bits=kwargs["low_bits"],
+            low_bits=0 if evict else kwargs["low_bits"],
             high_precision_native=kwargs["high_precision_native"],
         )
         compression_pct = 100 * kv_size_after / kv_size_before
@@ -985,7 +998,8 @@ def sweep_kv_compression(
             window_tokens="" if point.window_tokens is None else point.window_tokens,
             window_ratio=point.window_ratio,
             high_bits=kwargs["high_bits"],
-            low_bits=point.low_bits,
+            low_bits=0 if evict else point.low_bits,
+            evict=evict,
             high_precision_native=kwargs["high_precision_native"],
             sweep_mode=sweep_mode,
             num_samples=num_samples,
