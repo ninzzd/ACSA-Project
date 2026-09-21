@@ -1,0 +1,32 @@
+#jobid	started	node	kind	preset	flags
+26284	2026-08-27 19:33	gnode3	single	-	-
+26376	2026-08-28 21:35	gnode3	single	-	-
+26377	2026-08-28 22:22	gnode3	single	-	-
+26378	2026-08-28 22:34	gnode3	single	-	-
+26381	2026-08-29 08:45	gnode3	single	-	-
+26382	2026-08-29 09:11	gnode3	single	-	-
+26384	2026-08-29 09:46	gnode3	single	-	-
+26399	2026-08-29 11:45	gnode3	single	-	-
+26405	2026-08-29 12:06	gnode3	single	-	-
+26421	2026-08-29 12:39	gnode5	single	-	-
+26446	2026-08-29 14:59	gnode5	single	-	-
+26447	2026-08-29 19:43	gnode3	single	-	-
+26703	2026-08-31 22:43	gnode5	single	-	-
+26704	2026-08-31 23:53	gnode5	single	-	-
+27011	2026-09-09 10:26	gnode2	sweep	greedy	started   : 2026-09-09T10:26:17+05:30
+27255	2026-09-10 16:33	gnode5	sweep	--greedy	started   : 2026-09-10T16:33:01+05:30
+27262	2026-09-10 16:33	gnode5	sweep	confirm	--low-bits 2,4 --window-tokens 32,64
+27365	2026-09-11 14:26	gnode2	sweep	--greedy	started   : 2026-09-11T14:26:11+05:30
+27369	2026-09-11 14:42	gnode2	sweep	greedy	started   : 2026-09-11T14:42:52+05:30
+27381	2026-09-11 19:06	gnode2	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-signed 0 --score-decay-applications ranking --num-samples 40 --num-records 40 --seed 0 --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --balancers pow2 --high-tiers fp16 --low-bits 3,4 --window-tokens 64 --score-decay-schemes lut --age-lut-entries 512 --budget-ratios 0.05,0.1,0.15,0.25
+27382	2026-09-11 19:06	gnode2	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-signed 0 --score-decay-applications ranking --num-samples 40 --num-records 40 --seed 0 --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --balancers pow2 --high-tiers fp16,int8,int4 --low-bits 2,3,4 --window-tokens 64 --score-decay-schemes lut --age-lut-entries 512 --budget-ratios 0.25,0.5
+27383	2026-09-11 19:07	gnode3	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-signed 0 --score-decay-applications ranking --num-samples 40 --num-records 40 --seed 0 --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --balancers pow2 --high-tiers fp16 --low-bits 2,3 --window-tokens 64 --score-decay-schemes exact,pow2,lut --age-lut-entries 128,256,512 --budget-ratios 0.25,0.5
+27384	2026-09-11 19:06	gnode3	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-signed 0 --score-decay-applications ranking --num-samples 40 --num-records 40 --seed 0 --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --balancers pow2 --high-tiers fp16 --low-bits 2,3 --window-tokens 64,128,256 --score-decay-schemes lut --age-lut-entries 512 --budget-ratios 0.25,0.5
+27385	2026-09-11 19:06	gnode4	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-signed 0 --score-decay-applications ranking --num-samples 40 --num-records 40 --seed 0 --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --balancers paper,pow2 --high-tiers fp16 --low-bits 2,3 --window-tokens 64 --score-decay-schemes lut --age-lut-entries 512 --budget-ratios 0.25,0.5
+27406	2026-09-12 11:34	gnode2	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-decay-applications ranking --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --score-signed 0 --evict --num-samples 100 --num-records 40 --seed 1 --balancers pow2 --score-decay-schemes pow2 --window-tokens 64 --high-tiers int8,int4 --low-bits 4 --budget-ratios 0.05,0.25
+27407	2026-09-12 11:34	gnode2	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-decay-applications ranking --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --score-signed 0 --num-samples 40 --num-records 70 --seed 1 --balancers pow2 --score-decay-schemes pow2 --window-tokens 64 --high-tiers int8,int4 --low-bits 2,3,4 --budget-ratios 0.05,0.25
+27408	2026-09-12 11:34	gnode3	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-decay-applications ranking --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --score-signed 0 --num-samples 200 --num-records 40 --seed 1 --balancers pow2 --score-decay-schemes pow2 --window-tokens 64 --high-tiers int8,int4 --low-bits 2,3,4 --budget-ratios 0.05,0.25
+27409	2026-09-12 12:28	gnode2	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-decay-applications ranking --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --score-signed 0 --num-samples 40 --num-records 70 --seed 1 --balancers pow2 --score-decay-schemes pow2 --window-tokens 64 --high-tiers int8,int4 --low-bits 2,3,4 --budget-ratios 0.05,0.25
+27460	2026-09-12 17:26	gnode2	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-decay-applications ranking --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --score-signed 0 --num-samples 40 --num-records 70 --seed 1 --balancers pow2 --score-decay-schemes pow2 --window-tokens 64 --high-tiers int8,int4 --low-bits 2,3,4 --budget-ratios 0.05,0.25
+27461	2026-09-12 17:26	gnode2	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-decay-applications ranking --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --score-signed 0 --evict --num-samples 100 --num-records 40 --seed 1 --balancers pow2 --score-decay-schemes pow2 --window-tokens 64 --high-tiers int8,int4 --low-bits 4 --budget-ratios 0.05,0.25
+27462	2026-09-12T18:15:00+05:30	gnode2	sweep	legacy	--sweep-mode grid --budget-modes fixed_length --score-decay-applications ranking --score-schemes fixed --score-length-bits 30 --score-frac-bits 16 --score-signed 0 --num-samples 40 --num-records 70 --seed 1 --balancers pow2 --score-decay-schemes pow2 --window-tokens 64 --high-tiers int8,int4 --low-bits 2,3,4 --budget-ratios 0.05,0.25

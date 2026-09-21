@@ -1,0 +1,36 @@
+# Core tensor/model framework
+torch>=2.2
+transformers>=4.38
+accelerate>=0.27
+tokenizers>=0.15
+sentencepiece>=0.1.99
+safetensors>=0.4
+huggingface_hub>=0.20
+
+# Numerics (quantization math, importance scoring)
+numpy>=1.26
+scipy>=1.12
+
+# Benchmarks / evaluation datasets (MMLU, GSM8K, HumanEval, wikitext, etc.)
+datasets>=2.17
+lm-eval>=0.4.2
+human-eval>=1.0.3
+
+# Experiment tracking, results handling
+pandas>=2.2
+tqdm>=4.66
+matplotlib>=3.8
+
+# Config handling
+pyyaml>=6.0
+
+# Tokenizer conversion (SentencePiece → fast tokenizer)
+protobuf>=4.25
+
+# Attention / memory
+# (optional; requires CUDA build matching torch)
+# flash-attn>=2.5
+
+# Dataset backends commonly pulled by lm-eval tasks
+pyarrow>=15.0
+fsspec>=2024.2

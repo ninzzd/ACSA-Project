@@ -1,1 +1,8 @@
 .venv/
+.claude/
+**/__pycache__
+*.log
+hf_cache/
+logs/*.out
+logs/*.err
+slurm-*.out
