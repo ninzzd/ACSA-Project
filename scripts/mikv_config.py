@@ -214,7 +214,7 @@ BUDGET_MODE_LABELS = {
 # independent: `high_bits` is unread while the native flag is set, so crossing
 # them as two axes would run identical configurations under two names. One named
 # axis, mapped onto the pair by these helpers, keeps it at one value per run.
-HIGH_TIER_MODES = ("fp16", "int16", "int8", "int4")
+HIGH_TIER_MODES = ("fp16", "int16", "int8", "int4", "int3", "int2")
 DEFAULT_HIGH_TIER = "fp16" if DEFAULT_HIGH_PRECISION_NATIVE else f"int{DEFAULT_HIGH_BITS}"
 
 

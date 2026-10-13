@@ -1,0 +1,49 @@
+{
+ "run_key": "432f1a434bcc",
+ "describe": "pow2 w=0.5k HIGH fp16 LOW int3 fp32/exact",
+ "ratio": 0.5,
+ "model": "meta-llama/Llama-2-7b-chat-hf",
+ "method": "mikv",
+ "config": {
+  "budget_mode": "fixed_length",
+  "scheme": "pow2",
+  "score_scheme": "fp32",
+  "score_bits": "",
+  "score_decay_scheme": "exact",
+  "score_decay_application": "ranking",
+  "score_length_bits": "",
+  "score_frac_bits": "",
+  "score_signed": "",
+  "hw_delta_bits": "",
+  "hw_age_lut_entries": "",
+  "window_tokens": "",
+  "window_ratio": 0.5,
+  "high_bits": 8,
+  "low_bits": 3,
+  "high_precision_native": true
+ },
+ "settings": {
+  "benchmark": "humaneval",
+  "max_new_tokens": 512,
+  "max_tokens": 4096,
+  "stop_strings": [
+   "\nclass ",
+   "\ndef ",
+   "\n#",
+   "\nif __name__",
+   "\nprint(",
+   "\n```"
+  ],
+  "exec_timeout_s": 3.0,
+  "prompt_version": "humaneval-verbatim-v1"
+ },
+ "seed": 0,
+ "commit": "00505e3",
+ "torch_version": "2.7.1+cu126",
+ "transformers_version": "5.16.1",
+ "n_done": 164,
+ "pass_at_1": 0.1402,
+ "wall_clock_s": 1282.2,
+ "avg_kv_bits_occupied": 7.7587,
+ "compression_pct_occupied": 48.492
+}

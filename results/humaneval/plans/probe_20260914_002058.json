@@ -1,0 +1,92 @@
+{
+ "group": "probe",
+ "sweeps": [
+  "probe"
+ ],
+ "created": "2026-09-14 00:21:48",
+ "data": {
+  "path": "/home/others/23EC10068/kvcache/ACSA-Project/.venv/lib/python3.12/site-packages/human_eval/data/HumanEval.jsonl.gz",
+  "sha256": "b796127e635a67f93fb35c04f4cb03cf06f38c8072ee7cee8833d7bee06979ef",
+  "n_total": 164
+ },
+ "settings": {
+  "benchmark": "humaneval",
+  "max_new_tokens": 512,
+  "max_tokens": 4096,
+  "stop_strings": [
+   "\nclass ",
+   "\ndef ",
+   "\n#",
+   "\nif __name__",
+   "\nprint(",
+   "\n```"
+  ],
+  "exec_timeout_s": 3.0,
+  "prompt_version": "humaneval-verbatim-v1"
+ },
+ "model_name": "meta-llama/Llama-2-7b-chat-hf",
+ "problems_per_task": 164,
+ "units": [
+  {
+   "run_key": "45b7b60e5ecd",
+   "method": "baseline",
+   "point": null,
+   "ratio": null,
+   "problems": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+   ],
+   "shard": 0,
+   "shards": 1,
+   "sweeps": [
+    "probe"
+   ]
+  },
+  {
+   "run_key": "b773b96832bf",
+   "method": "mikv",
+   "point": {
+    "budget_mode": "fixed_length",
+    "balance_scheme": "pow2",
+    "window_tokens": null,
+    "window_ratio": 0.5,
+    "high_tier": "fp16",
+    "low_bits": 4,
+    "score_scheme": "fixed",
+    "score_bits": 8,
+    "score_decay_scheme": "lut",
+    "score_decay_application": "ranking",
+    "score_length_bits": 30,
+    "score_frac_bits": 16,
+    "score_signed": false,
+    "age_lut_entries": 512
+   },
+   "ratio": 0.3,
+   "problems": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+   ],
+   "shard": 0,
+   "shards": 1,
+   "sweeps": [
+    "probe"
+   ]
+  }
+ ]
+}

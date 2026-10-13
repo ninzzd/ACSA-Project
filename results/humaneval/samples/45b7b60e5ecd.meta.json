@@ -1,0 +1,49 @@
+{
+ "run_key": "45b7b60e5ecd",
+ "describe": "uncompressed baseline",
+ "ratio": "",
+ "model": "meta-llama/Llama-2-7b-chat-hf",
+ "method": "baseline",
+ "config": {
+  "budget_mode": "",
+  "scheme": "",
+  "score_scheme": "",
+  "score_bits": "",
+  "score_decay_scheme": "",
+  "score_decay_application": "",
+  "score_length_bits": "",
+  "score_frac_bits": "",
+  "score_signed": "",
+  "hw_delta_bits": "",
+  "hw_age_lut_entries": "",
+  "window_tokens": "",
+  "window_ratio": "",
+  "high_bits": "",
+  "low_bits": "",
+  "high_precision_native": ""
+ },
+ "settings": {
+  "benchmark": "humaneval",
+  "max_new_tokens": 512,
+  "max_tokens": 4096,
+  "stop_strings": [
+   "\nclass ",
+   "\ndef ",
+   "\n#",
+   "\nif __name__",
+   "\nprint(",
+   "\n```"
+  ],
+  "exec_timeout_s": 3.0,
+  "prompt_version": "humaneval-verbatim-v1"
+ },
+ "seed": 0,
+ "commit": "00505e3",
+ "torch_version": "2.7.1+cu126",
+ "transformers_version": "5.16.1",
+ "n_done": 164,
+ "pass_at_1": 0.3,
+ "wall_clock_s": 1155.3,
+ "avg_kv_bits_occupied": 16.0,
+ "compression_pct_occupied": 100.0
+}

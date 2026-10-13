@@ -1,0 +1,106 @@
+{
+ "group": "probe",
+ "sweeps": [
+  "probe"
+ ],
+ "created": "2026-09-13 18:57:24",
+ "data": {
+  "path": "data/gsm8k/test.jsonl",
+  "sha256": "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14",
+  "n_total": 1319
+ },
+ "settings": {
+  "n_shot": 8,
+  "max_new_tokens": 256,
+  "max_tokens": 4096,
+  "stop_strings": [
+   "Q:"
+  ],
+  "prompt_version": "wei2022-cot-8shot-plain-v1"
+ },
+ "model_name": "meta-llama/Llama-2-7b-chat-hf",
+ "problems_per_task": 330,
+ "units": [
+  {
+   "run_key": "6c00ba1d9751",
+   "method": "baseline",
+   "point": null,
+   "ratio": null,
+   "problems": [
+    0,
+    2,
+    3,
+    4,
+    6,
+    25,
+    27,
+    28,
+    29,
+    30,
+    33,
+    44,
+    46,
+    54,
+    64,
+    67,
+    74,
+    79,
+    80,
+    82
+   ],
+   "shard": 0,
+   "shards": 1,
+   "sweeps": [
+    "probe"
+   ]
+  },
+  {
+   "run_key": "9f68ad5fba17",
+   "method": "mikv",
+   "point": {
+    "budget_mode": "fixed_length",
+    "balance_scheme": "pow2",
+    "window_tokens": 64,
+    "window_ratio": 0.5,
+    "high_tier": "fp16",
+    "low_bits": 4,
+    "score_scheme": "fixed",
+    "score_bits": 8,
+    "score_decay_scheme": "lut",
+    "score_decay_application": "ranking",
+    "score_length_bits": 30,
+    "score_frac_bits": 16,
+    "score_signed": false,
+    "age_lut_entries": 512
+   },
+   "ratio": 0.25,
+   "problems": [
+    0,
+    2,
+    3,
+    4,
+    6,
+    25,
+    27,
+    28,
+    29,
+    30,
+    33,
+    44,
+    46,
+    54,
+    64,
+    67,
+    74,
+    79,
+    80,
+    82
+   ],
+   "shard": 0,
+   "shards": 1,
+   "sweeps": [
+    "probe"
+   ]
+  }
+ ]
+}
