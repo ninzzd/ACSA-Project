@@ -1,0 +1,29 @@
+ABC: + source /home/user/sj-0142/acsa-project/rtl/ipu_v2/syn/abc_timing.abc 
+ABC: WireLoad = "none"  Gates =  37539 ( 10.9 %)   Cap =  3.3 ff (  0.9 %)   Area =    44848.93 ( 95.7 %)   Delay =  1087.47 ps  (  4.0 %)               
+ABC: Path  0 --      46 : 0    4 pi        A =   0.00  Df =   0.0   -0.0 ps  S =   0.0 ps  Cin =  0.0 ff  Cout =  10.8 ff  Cmax =   0.0 ff  G =    0  
+ABC: Path  1 --   34218 : 3    7 OAI21_X4  A =   3.46  Df =  37.7   -3.8 ps  S =  27.3 ps  Cin =  6.1 ff  Cout =  14.4 ff  Cmax = 104.1 ff  G =  226  
+ABC: Path  2 --   34274 : 4    4 NAND4_X2  A =   2.39  Df =  77.6  -13.5 ps  S =  22.0 ps  Cin =  3.3 ff  Cout =   7.4 ff  Cmax = 111.5 ff  G =  210  
+ABC: Path  3 --   34276 : 3    2 OAI21_X2  A =   1.86  Df = 116.7   -8.9 ps  S =  25.1 ps  Cin =  3.1 ff  Cout =   6.1 ff  Cmax =  52.1 ff  G =  184  
+ABC: Path  4 --   34277 : 3    2 AOI21_X2  A =   1.86  Df = 155.5  -14.0 ps  S =  34.7 ps  Cin =  3.1 ff  Cout =   9.1 ff  Cmax =  50.7 ff  G =  292  
+ABC: Path  5 --   34278 : 3    2 OAI21_X4  A =   3.46  Df = 177.3   -3.5 ps  S =  17.6 ps  Cin =  6.1 ff  Cout =   6.1 ff  Cmax = 104.1 ff  G =   92  
+ABC: Path  6 --   34279 : 3    2 AOI21_X2  A =   1.86  Df = 224.5  -27.7 ps  S =  34.7 ps  Cin =  3.1 ff  Cout =   9.1 ff  Cmax =  50.7 ff  G =  292  
+ABC: Path  7 --   34280 : 3    3 OAI21_X4  A =   3.46  Df = 247.7  -16.9 ps  S =  19.4 ps  Cin =  6.1 ff  Cout =   7.6 ff  Cmax = 104.1 ff  G =  119  
+ABC: Path  8 --   34281 : 3    3 NAND3_X2  A =   1.86  Df = 274.2  -16.9 ps  S =  18.8 ps  Cin =  3.2 ff  Cout =   6.4 ff  Cmax = 116.3 ff  G =  189  
+ABC: Path  9 --   34283 : 4    3 AOI211_X2 A =   2.39  Df = 301.7  -10.0 ps  S =  39.9 ps  Cin =  3.1 ff  Cout =   4.2 ff  Cmax =  29.0 ff  G =  128  
+ABC: Path 10 --   34287 : 4    3 OAI211_X1 A =   1.33  Df = 344.2   -3.4 ps  S =  39.3 ps  Cin =  1.6 ff  Cout =   5.7 ff  Cmax =  25.6 ff  G =  345  
+ABC: Path 11 --   34290 : 4    3 AOI211_X2 A =   2.39  Df = 396.1  -26.8 ps  S =  47.7 ps  Cin =  3.1 ff  Cout =   6.4 ff  Cmax =  29.0 ff  G =  193  
+ABC: Path 12 --   34293 : 4    2 OAI211_X2 A =   2.39  Df = 432.5  -18.2 ps  S =  33.7 ps  Cin =  3.1 ff  Cout =   8.0 ff  Cmax =  50.8 ff  G =  245  
+ABC: Path 13 --   34298 : 3    2 AOI21_X4  A =   3.46  Df = 466.8  -35.5 ps  S =  19.8 ps  Cin =  6.0 ff  Cout =   4.8 ff  Cmax = 101.0 ff  G =   79  
+ABC: Path 14 --   34299 : 4    4 OAI211_X2 A =   2.39  Df = 501.2  -19.0 ps  S =  34.9 ps  Cin =  3.1 ff  Cout =   9.3 ff  Cmax =  50.8 ff  G =  295  
+ABC: Path 15 --   34300 : 4    5 OR4_X4    A =   3.46  Df = 615.3  -95.4 ps  S =  17.0 ps  Cin =  3.3 ff  Cout =  10.2 ff  Cmax = 241.7 ff  G =  302  
+ABC: Path 16 --   34301 : 4    3 OR4_X4    A =   3.46  Df = 724.5 -178.4 ps  S =  15.9 ps  Cin =  3.3 ff  Cout =   6.2 ff  Cmax = 241.7 ff  G =  186  
+ABC: Path 17 --   34302 : 4    3 OR4_X4    A =   3.46  Df = 836.0 -262.5 ps  S =  16.9 ps  Cin =  3.3 ff  Cout =   9.6 ff  Cmax = 241.7 ff  G =  287  
+ABC: Path 18 --   34303 : 3    2 NOR3_X4   A =   3.72  Df = 889.6 -305.7 ps  S =  26.8 ps  Cin =  5.9 ff  Cout =   6.1 ff  Cmax =  63.3 ff  G =  100  
+ABC: Path 19 --   34304 : 3    2 NAND3_X2  A =   1.86  Df = 917.0 -310.5 ps  S =  18.6 ps  Cin =  3.2 ff  Cout =   5.7 ff  Cmax = 116.3 ff  G =  174  
+ABC: Path 20 --   34305 : 3    2 NOR3_X2   A =   1.86  Df = 977.8 -357.6 ps  S =  34.0 ps  Cin =  3.2 ff  Cout =   5.2 ff  Cmax =  31.7 ff  G =  154  
+ABC: Path 21 --   34306 : 2    3 AND2_X4   A =   2.39  Df =1018.4 -367.1 ps  S =  12.2 ps  Cin =  3.2 ff  Cout =  13.4 ff  Cmax = 241.7 ff  G =  388  
+ABC: Path 22 --   42921 : 1   10 BUF_X8    A =   3.46  Df =1042.0 -366.0 ps  S =   8.2 ps  Cin =  6.2 ff  Cout =  16.7 ff  Cmax = 484.0 ff  G =  253  
+ABC: Path 23 --   43000 : 3    1 AOI21_X1  A =   1.06  Df =1053.5 -340.3 ps  S =  21.7 ps  Cin =  1.6 ff  Cout =   1.6 ff  Cmax =  25.3 ff  G =  101  
+ABC: Path 24 --   43001 : 4    1 OAI22_X1  A =   1.33  Df =1087.5 -353.8 ps  S =  22.4 ps  Cin =  1.6 ff  Cout =   0.0 ff  Cmax =  23.2 ff  G =    0  
+ABC: Start-point = pi45 (\u_pipe.word2 [383]).  End-point = po4310 ($auto$rtlil.cc:2609:MuxGate$154009).
+ABC: + write_blif /tmp/yosys-abc-aAwgUJ/output.blif 
