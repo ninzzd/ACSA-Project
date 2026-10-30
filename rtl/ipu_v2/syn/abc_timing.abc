@@ -1,0 +1,10 @@
+strash
+dc2
+&get -n
+&dch -f
+&nf
+&put
+buffer
+upsize
+dnsize
+stime -p

@@ -1,0 +1,658 @@
+
+23. Printing statistics.
+
+=== $paramod$17457892040a80ade2fc8ed5108659addb1233d6\ipu_seq_fsm ===
+
+   Number of wires:               2378
+   Number of wire bits:           3092
+   Number of public wires:         115
+   Number of public wire bits:     793
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               2391
+     AND2_X1                        45
+     AND3_X1                        26
+     AND4_X1                        10
+     AOI211_X1                      24
+     AOI21_X1                      110
+     AOI221_X1                       9
+     AOI222_X1                       3
+     AOI22_X1                       61
+     DFFR_X1                       118
+     DFF_X1                        260
+     INV_X1                        179
+     MUX2_X1                       505
+     NAND2_X1                      189
+     NAND3_X1                       61
+     NAND4_X1                       33
+     NOR2_X1                       172
+     NOR3_X1                        84
+     NOR4_X1                        28
+     OAI211_X1                      85
+     OAI21_X1                      180
+     OAI221_X1                       6
+     OAI222_X1                       2
+     OAI22_X1                       46
+     OAI33_X1                        3
+     OR2_X1                         17
+     OR3_X1                         10
+     OR4_X1                          5
+     XNOR2_X1                       68
+     XOR2_X1                        52
+
+   Chip area for module '$paramod$17457892040a80ade2fc8ed5108659addb1233d6\ipu_seq_fsm': 4327.820000
+
+=== $paramod$1c49d844c5c7f9045517b9c97021bf8c7176d029\ipu_pipe ===
+
+   Number of wires:               3770
+   Number of wire bits:           8095
+   Number of public wires:          69
+   Number of public wire bits:    4394
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               3713
+     $paramod$5f24e0a1759061956577a7674cbb55bcf817b1fb\ipu_lane_ctl      1
+     $paramod$9056b9589abf0e53aa1f64ea2fe7a2be53a0302f\ipu_min_track      1
+     $paramod$9056b9589abf0e53aa1f64ea2fe7a2be53a0302f\ipu_min_tree      1
+     $paramod\ipu_accum\P=s32'00000000000000000000000000010000      1
+     $paramod\ipu_cmp_shift\P=s32'00000000000000000000000000010000      1
+     $paramod\ipu_ingress\P=s32'00000000000000000000000000010000      1
+     AND3_X1                         1
+     AND4_X1                         3
+     AOI211_X1                       1
+     AOI22_X1                        8
+     DFFR_X1                         3
+     DFF_X1                       1837
+     INV_X1                          4
+     MUX2_X1                      1837
+     NAND2_X1                        2
+     NAND3_X1                        1
+     NOR2_X1                         1
+     NOR3_X1                         1
+     NOR4_X1                         4
+     OAI21_X1                        2
+     OR2_X1                          2
+
+   Area for cell type $paramod$9056b9589abf0e53aa1f64ea2fe7a2be53a0302f\ipu_min_track is unknown!
+   Area for cell type $paramod$9056b9589abf0e53aa1f64ea2fe7a2be53a0302f\ipu_min_tree is unknown!
+   Area for cell type $paramod\ipu_cmp_shift\P=s32'00000000000000000000000000010000 is unknown!
+   Area for cell type $paramod\ipu_accum\P=s32'00000000000000000000000000010000 is unknown!
+   Area for cell type $paramod$5f24e0a1759061956577a7674cbb55bcf817b1fb\ipu_lane_ctl is unknown!
+   Area for cell type $paramod\ipu_ingress\P=s32'00000000000000000000000000010000 is unknown!
+
+   Chip area for module '$paramod$1c49d844c5c7f9045517b9c97021bf8c7176d029\ipu_pipe': 11777.682000
+
+=== $paramod$214dd40b4faacd51ca10d4d04601aee8cbe4b5be\ipu_psel ===
+
+   Number of wires:               4682
+   Number of wire bits:           6370
+   Number of public wires:          40
+   Number of public wire bits:    1685
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               4691
+     $paramod$5f24e0a1759061956577a7674cbb55bcf817b1fb\ipu_lane_ctl      1
+     $paramod\ipu_cmp_shift\P=s32'00000000000000000000000000010000      1
+     AND2_X1                        68
+     AND3_X1                        23
+     AND4_X1                        33
+     AOI211_X1                      48
+     AOI21_X1                      289
+     AOI221_X1                     144
+     AOI222_X1                     133
+     AOI22_X1                      444
+     DFFR_X1                         5
+     DFF_X1                        313
+     INV_X1                        353
+     MUX2_X1                        52
+     NAND2_X1                      232
+     NAND3_X1                      107
+     NAND4_X1                      112
+     NOR2_X1                       463
+     NOR3_X1                       213
+     NOR4_X1                       106
+     OAI211_X1                      55
+     OAI21_X1                      404
+     OAI221_X1                      32
+     OAI22_X1                       24
+     OR2_X1                         90
+     OR3_X1                        106
+     OR4_X1                         20
+     XNOR2_X1                      137
+     XOR2_X1                       683
+
+   Area for cell type $paramod\ipu_cmp_shift\P=s32'00000000000000000000000000010000 is unknown!
+   Area for cell type $paramod$5f24e0a1759061956577a7674cbb55bcf817b1fb\ipu_lane_ctl is unknown!
+
+   Chip area for module '$paramod$214dd40b4faacd51ca10d4d04601aee8cbe4b5be\ipu_psel': 6705.328000
+
+=== $paramod$2509da30cf6754537dac6f207aae05a7b382b43e\ipu_rd_eng ===
+
+   Number of wires:               1460
+   Number of wire bits:           2624
+   Number of public wires:          36
+   Number of public wire bits:    1198
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               1434
+     AND2_X1                        15
+     AND3_X1                         8
+     AND4_X1                         1
+     AOI211_X1                       7
+     AOI21_X1                       28
+     AOI221_X1                       2
+     AOI22_X1                       14
+     DFFR_X1                        43
+     DFF_X1                        533
+     INV_X1                         41
+     MUX2_X1                       540
+     NAND2_X1                       27
+     NAND3_X1                       11
+     NAND4_X1                        1
+     NOR2_X1                        40
+     NOR3_X1                        19
+     NOR4_X1                         1
+     OAI211_X1                       3
+     OAI21_X1                       42
+     OAI221_X1                       2
+     OAI22_X1                        3
+     OR2_X1                          7
+     OR3_X1                          5
+     XNOR2_X1                       30
+     XOR2_X1                        11
+
+   Chip area for module '$paramod$2509da30cf6754537dac6f207aae05a7b382b43e\ipu_rd_eng': 3978.828000
+
+=== $paramod$4823b7dc5e4cf742ead4811e8ca06c76d89f97e5\ipu_wr_eng ===
+
+   Number of wires:                524
+   Number of wire bits:            662
+   Number of public wires:          29
+   Number of public wire bits:     160
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:                514
+     AND2_X1                        13
+     AND3_X1                         4
+     AOI211_X1                       9
+     AOI21_X1                       36
+     AOI221_X1                       1
+     AOI22_X1                        6
+     DFFR_X1                        46
+     DFF_X1                         21
+     INV_X1                         43
+     MUX2_X1                        40
+     NAND2_X1                       41
+     NAND3_X1                       22
+     NAND4_X1                        6
+     NOR2_X1                        38
+     NOR3_X1                        12
+     NOR4_X1                         5
+     OAI211_X1                      11
+     OAI21_X1                       47
+     OAI221_X1                       1
+     OAI22_X1                       10
+     OR2_X1                         14
+     OR3_X1                          5
+     XNOR2_X1                       63
+     XOR2_X1                        20
+
+   Chip area for module '$paramod$4823b7dc5e4cf742ead4811e8ca06c76d89f97e5\ipu_wr_eng': 863.436000
+
+=== $paramod$5f24e0a1759061956577a7674cbb55bcf817b1fb\ipu_lane_ctl ===
+
+   Number of wires:                600
+   Number of wire bits:            740
+   Number of public wires:           7
+   Number of public wire bits:     147
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:                704
+     AND2_X1                        36
+     AND3_X1                         4
+     AND4_X1                         3
+     AOI211_X1                       8
+     AOI21_X1                      144
+     AOI221_X1                       5
+     AOI22_X1                        9
+     INV_X1                         63
+     NAND2_X1                       98
+     NAND3_X1                       11
+     NAND4_X1                        5
+     NOR2_X1                       104
+     NOR3_X1                        14
+     NOR4_X1                         6
+     OAI211_X1                       9
+     OAI21_X1                      124
+     OAI221_X1                       1
+     OAI22_X1                        6
+     OR2_X1                         33
+     OR3_X1                          2
+     OR4_X1                          2
+     XNOR2_X1                       14
+     XOR2_X1                         3
+
+   Chip area for module '$paramod$5f24e0a1759061956577a7674cbb55bcf817b1fb\ipu_lane_ctl': 689.738000
+
+=== $paramod$63e89227268dc6b2e5932e6e9b24bf5bb47d4e3f\ipu_fifo ===
+
+   Number of wires:               2112
+   Number of wire bits:           4182
+   Number of public wires:          15
+   Number of public wire bits:    2084
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               2617
+     AOI21_X1                        1
+     DFFR_X1                         5
+     DFFS_X1                         1
+     DFF_X1                       1036
+     INV_X1                          6
+     MUX2_X1                      1557
+     NAND2_X1                        3
+     NOR2_X1                         3
+     OAI211_X1                       2
+     OAI22_X1                        2
+     XNOR2_X1                        1
+
+   Chip area for module '$paramod$63e89227268dc6b2e5932e6e9b24bf5bb47d4e3f\ipu_fifo': 7631.806000
+
+=== $paramod$896765dd3c69d3467c38b654bf6aa093f5936035\ipu_sram_1r1w ===
+
+   Number of wires:                  8
+   Number of wire bits:           1555
+   Number of public wires:           8
+   Number of public wire bits:    1555
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:                  1
+     fakeram45_256x512_1r1w          1
+
+   Chip area for module '$paramod$896765dd3c69d3467c38b654bf6aa093f5936035\ipu_sram_1r1w': 135961.036000
+
+=== $paramod$8e99b47011f66d79b4aa1a7f496ab9a41c59c888\ipu_csr ===
+
+   Number of wires:               1622
+   Number of wire bits:           2216
+   Number of public wires:          46
+   Number of public wire bits:     449
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               1584
+     AND2_X1                        58
+     AND3_X1                        22
+     AND4_X1                        33
+     AOI21_X1                       92
+     AOI221_X1                       5
+     AOI222_X1                      21
+     AOI22_X1                      138
+     DFFR_X1                       358
+     DFFS_X1                        14
+     INV_X1                        101
+     MUX2_X1                       158
+     NAND2_X1                       95
+     NAND3_X1                      111
+     NAND4_X1                       38
+     NOR2_X1                        99
+     NOR3_X1                        28
+     NOR4_X1                        46
+     OAI211_X1                      11
+     OAI21_X1                       20
+     OAI221_X1                       4
+     OAI22_X1                       11
+     OR2_X1                          2
+     OR3_X1                          2
+     OR4_X1                          6
+     XNOR2_X1                       51
+     XOR2_X1                        60
+
+   Chip area for module '$paramod$8e99b47011f66d79b4aa1a7f496ab9a41c59c888\ipu_csr': 3467.576000
+
+=== $paramod$9056b9589abf0e53aa1f64ea2fe7a2be53a0302f\ipu_min_track ===
+
+   Number of wires:                317
+   Number of wire bits:            420
+   Number of public wires:          12
+   Number of public wire bits:     115
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:                306
+     AND2_X1                         2
+     AOI211_X1                       4
+     AOI21_X1                        9
+     AOI221_X1                       2
+     AOI22_X1                        9
+     DFFR_X1                         1
+     DFF_X1                         54
+     INV_X1                         46
+     MUX2_X1                        54
+     NAND2_X1                       20
+     NAND3_X1                       10
+     NAND4_X1                       12
+     NOR2_X1                        10
+     NOR3_X1                         7
+     NOR4_X1                         4
+     OAI211_X1                       5
+     OAI21_X1                       14
+     OAI221_X1                       1
+     OAI22_X1                        8
+     OR2_X1                          3
+     OR3_X1                          3
+     XNOR2_X1                       19
+     XOR2_X1                         9
+
+   Chip area for module '$paramod$9056b9589abf0e53aa1f64ea2fe7a2be53a0302f\ipu_min_track': 555.674000
+
+=== $paramod$9056b9589abf0e53aa1f64ea2fe7a2be53a0302f\ipu_min_tree ===
+
+   Number of wires:               3183
+   Number of wire bits:           5141
+   Number of public wires:          68
+   Number of public wire bits:    1411
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               3756
+     AND2_X1                        23
+     AND3_X1                        26
+     AND4_X1                        17
+     AOI211_X1                      14
+     AOI21_X1                      105
+     AOI221_X1                      74
+     AOI22_X1                       67
+     DFFR_X1                         4
+     DFF_X1                        696
+     INV_X1                        643
+     MUX2_X1                       626
+     NAND2_X1                      204
+     NAND3_X1                       89
+     NAND4_X1                       30
+     NOR2_X1                       203
+     NOR3_X1                       121
+     NOR4_X1                        43
+     OAI211_X1                      18
+     OAI21_X1                      128
+     OAI221_X1                      28
+     OAI22_X1                       75
+     OR2_X1                          4
+     OR3_X1                         26
+     OR4_X1                          2
+     XNOR2_X1                      200
+     XOR2_X1                       290
+
+   Chip area for module '$paramod$9056b9589abf0e53aa1f64ea2fe7a2be53a0302f\ipu_min_tree': 6873.972000
+
+=== $paramod$fb0c5c73cf7bfb12292974ae5b9563a2ea977027\ipu_fifo ===
+
+   Number of wires:                305
+   Number of wire bits:            455
+   Number of public wires:          17
+   Number of public wire bits:     165
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:                315
+     DFFR_X1                         8
+     DFFS_X1                         1
+     DFF_X1                        100
+     INV_X1                          5
+     MUX2_X1                       177
+     NAND2_X1                        6
+     NAND3_X1                        2
+     NAND4_X1                        1
+     NOR2_X1                         2
+     NOR3_X1                         2
+     OAI211_X1                       1
+     OAI21_X1                        2
+     OAI22_X1                        1
+     OR2_X1                          1
+     XNOR2_X1                        5
+     XOR2_X1                         1
+
+   Chip area for module '$paramod$fb0c5c73cf7bfb12292974ae5b9563a2ea977027\ipu_fifo': 859.712000
+
+=== $paramod$fb0c5c73cf7bfb12292974ae5b9563a2ea977027\ipu_issue ===
+
+   Number of wires:                 69
+   Number of wire bits:            133
+   Number of public wires:          14
+   Number of public wire bits:      73
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:                 58
+     $paramod$fb0c5c73cf7bfb12292974ae5b9563a2ea977027\ipu_fifo      1
+     AND2_X1                         3
+     AOI21_X1                        5
+     AOI22_X1                        2
+     DFFR_X1                         6
+     INV_X1                          8
+     MUX2_X1                         3
+     NAND2_X1                        4
+     NAND4_X1                        1
+     NOR2_X1                         5
+     NOR3_X1                         2
+     OAI211_X1                       1
+     OAI21_X1                        6
+     OAI22_X1                        3
+     OR2_X1                          1
+     XNOR2_X1                        4
+     XOR2_X1                         3
+
+   Area for cell type $paramod$fb0c5c73cf7bfb12292974ae5b9563a2ea977027\ipu_fifo is unknown!
+
+   Chip area for module '$paramod$fb0c5c73cf7bfb12292974ae5b9563a2ea977027\ipu_issue': 87.514000
+
+=== $paramod\ipu_accum\P=s32'00000000000000000000000000010000 ===
+
+   Number of wires:               2681
+   Number of wire bits:           4049
+   Number of public wires:           9
+   Number of public wire bits:    1377
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               3216
+     AND2_X1                       127
+     AND3_X1                        22
+     AND4_X1                       118
+     AOI211_X1                      52
+     AOI21_X1                      563
+     AOI22_X1                      125
+     INV_X1                        280
+     MUX2_X1                         1
+     NAND2_X1                      565
+     NAND3_X1                       38
+     NAND4_X1                       82
+     NOR2_X1                       296
+     NOR3_X1                        44
+     NOR4_X1                        15
+     OAI211_X1                      19
+     OAI21_X1                      218
+     OAI22_X1                        2
+     OAI33_X1                        9
+     OR2_X1                        116
+     OR3_X1                         39
+     OR4_X1                          3
+     XNOR2_X1                      331
+     XOR2_X1                       151
+
+   Chip area for module '$paramod\ipu_accum\P=s32'00000000000000000000000000010000': 3467.310000
+
+=== $paramod\ipu_cmp_shift\P=s32'00000000000000000000000000010000 ===
+
+   Number of wires:               2454
+   Number of wire bits:           3714
+   Number of public wires:           5
+   Number of public wire bits:    1265
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               3121
+     AND2_X1                        96
+     AOI21_X1                      144
+     AOI221_X1                      64
+     AOI222_X1                     288
+     AOI22_X1                       96
+     INV_X1                        129
+     MUX2_X1                      1328
+     NAND2_X1                      560
+     NOR2_X1                        64
+     NOR3_X1                        32
+     OAI211_X1                      48
+     OAI21_X1                      224
+     OAI221_X1                      16
+     OR2_X1                         32
+
+   Chip area for module '$paramod\ipu_cmp_shift\P=s32'00000000000000000000000000010000': 4533.172000
+
+=== $paramod\ipu_ingress\P=s32'00000000000000000000000000010000 ===
+
+   Number of wires:               1875
+   Number of wire bits:           2416
+   Number of public wires:           3
+   Number of public wire bits:     544
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               2160
+     AND2_X1                        96
+     AND3_X1                        48
+     AND4_X1                        32
+     AOI21_X1                      384
+     INV_X1                        112
+     MUX2_X1                       528
+     NAND2_X1                      128
+     NAND3_X1                       32
+     NAND4_X1                       32
+     NOR2_X1                       224
+     NOR3_X1                        32
+     NOR4_X1                        80
+     OAI21_X1                      144
+     OR2_X1                         96
+     OR3_X1                         16
+     OR4_X1                         16
+     XNOR2_X1                      112
+     XOR2_X1                        48
+
+   Chip area for module '$paramod\ipu_ingress\P=s32'00000000000000000000000000010000': 2723.840000
+
+=== ipu_top ===
+
+   Number of wires:               2813
+   Number of wire bits:           6876
+   Number of public wires:         152
+   Number of public wire bits:    4215
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:               3200
+     $paramod$17457892040a80ade2fc8ed5108659addb1233d6\ipu_seq_fsm      1
+     $paramod$1c49d844c5c7f9045517b9c97021bf8c7176d029\ipu_pipe      1
+     $paramod$214dd40b4faacd51ca10d4d04601aee8cbe4b5be\ipu_psel      1
+     $paramod$2509da30cf6754537dac6f207aae05a7b382b43e\ipu_rd_eng      1
+     $paramod$4823b7dc5e4cf742ead4811e8ca06c76d89f97e5\ipu_wr_eng      1
+     $paramod$63e89227268dc6b2e5932e6e9b24bf5bb47d4e3f\ipu_fifo      1
+     $paramod$896765dd3c69d3467c38b654bf6aa093f5936035\ipu_sram_1r1w      1
+     $paramod$8e99b47011f66d79b4aa1a7f496ab9a41c59c888\ipu_csr      1
+     $paramod$fb0c5c73cf7bfb12292974ae5b9563a2ea977027\ipu_issue      1
+     AND2_X1                       512
+     AOI211_X1                     512
+     INV_X1                        516
+     MUX2_X1                       544
+     NAND2_X1                        3
+     NAND3_X1                        7
+     NOR2_X1                       513
+     NOR3_X1                         1
+     OAI21_X1                       15
+     OR2_X1                        564
+     OR3_X1                          2
+     XNOR2_X1                        1
+     XOR2_X1                         1
+
+   Area for cell type $paramod$fb0c5c73cf7bfb12292974ae5b9563a2ea977027\ipu_issue is unknown!
+   Area for cell type $paramod$63e89227268dc6b2e5932e6e9b24bf5bb47d4e3f\ipu_fifo is unknown!
+   Area for cell type $paramod$4823b7dc5e4cf742ead4811e8ca06c76d89f97e5\ipu_wr_eng is unknown!
+   Area for cell type $paramod$2509da30cf6754537dac6f207aae05a7b382b43e\ipu_rd_eng is unknown!
+   Area for cell type $paramod$896765dd3c69d3467c38b654bf6aa093f5936035\ipu_sram_1r1w is unknown!
+   Area for cell type $paramod$214dd40b4faacd51ca10d4d04601aee8cbe4b5be\ipu_psel is unknown!
+   Area for cell type $paramod$17457892040a80ade2fc8ed5108659addb1233d6\ipu_seq_fsm is unknown!
+   Area for cell type $paramod$1c49d844c5c7f9045517b9c97021bf8c7176d029\ipu_pipe is unknown!
+   Area for cell type $paramod$8e99b47011f66d79b4aa1a7f496ab9a41c59c888\ipu_csr is unknown!
+
+   Chip area for module '\ipu_top': 3555.356000
+
+=== design hierarchy ===
+
+   ipu_top                           1
+     $paramod$17457892040a80ade2fc8ed5108659addb1233d6\ipu_seq_fsm      1
+     $paramod$1c49d844c5c7f9045517b9c97021bf8c7176d029\ipu_pipe      1
+       $paramod$5f24e0a1759061956577a7674cbb55bcf817b1fb\ipu_lane_ctl      1
+       $paramod$9056b9589abf0e53aa1f64ea2fe7a2be53a0302f\ipu_min_track      1
+       $paramod$9056b9589abf0e53aa1f64ea2fe7a2be53a0302f\ipu_min_tree      1
+       $paramod\ipu_accum\P=s32'00000000000000000000000000010000      1
+       $paramod\ipu_cmp_shift\P=s32'00000000000000000000000000010000      1
+       $paramod\ipu_ingress\P=s32'00000000000000000000000000010000      1
+     $paramod$214dd40b4faacd51ca10d4d04601aee8cbe4b5be\ipu_psel      1
+       $paramod$5f24e0a1759061956577a7674cbb55bcf817b1fb\ipu_lane_ctl      1
+       $paramod\ipu_cmp_shift\P=s32'00000000000000000000000000010000      1
+     $paramod$2509da30cf6754537dac6f207aae05a7b382b43e\ipu_rd_eng      1
+     $paramod$4823b7dc5e4cf742ead4811e8ca06c76d89f97e5\ipu_wr_eng      1
+     $paramod$63e89227268dc6b2e5932e6e9b24bf5bb47d4e3f\ipu_fifo      1
+     $paramod$896765dd3c69d3467c38b654bf6aa093f5936035\ipu_sram_1r1w      1
+     $paramod$8e99b47011f66d79b4aa1a7f496ab9a41c59c888\ipu_csr      1
+     $paramod$fb0c5c73cf7bfb12292974ae5b9563a2ea977027\ipu_issue      1
+       $paramod$fb0c5c73cf7bfb12292974ae5b9563a2ea977027\ipu_fifo      1
+
+   Number of wires:              33907
+   Number of wire bits:          57194
+   Number of public wires:         657
+   Number of public wire bits:   23042
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:              37588
+     AND2_X1                      1226
+     AND3_X1                       188
+     AND4_X1                       253
+     AOI211_X1                     687
+     AOI21_X1                     2198
+     AOI221_X1                     375
+     AOI222_X1                     733
+     AOI22_X1                     1084
+     DFFR_X1                       597
+     DFFS_X1                        16
+     DFF_X1                       4850
+     INV_X1                       2721
+     MUX2_X1                      9278
+     NAND2_X1                     2835
+     NAND3_X1                      513
+     NAND4_X1                      358
+     NOR2_X1                      2405
+     NOR3_X1                       658
+     NOR4_X1                       344
+     OAI211_X1                     325
+     OAI21_X1                     1918
+     OAI221_X1                     108
+     OAI222_X1                       2
+     OAI22_X1                      197
+     OAI33_X1                       12
+     OR2_X1                       1047
+     OR3_X1                        218
+     OR4_X1                         56
+     XNOR2_X1                     1050
+     XOR2_X1                      1335
+     fakeram45_256x512_1r1w          1
+
+   Chip area for top module '\ipu_top': 203282.710000
+
