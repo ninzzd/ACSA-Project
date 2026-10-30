@@ -1,0 +1,6 @@
+sim/xsim_work/
+sim/oss_work/
+syn/out/
+*.vcd
+*.fst
+__pycache__/
