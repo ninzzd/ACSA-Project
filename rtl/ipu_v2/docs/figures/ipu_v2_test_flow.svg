@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1250" viewBox="0 0 1600 1250" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#444"/>
+    </marker>
+  </defs>
+  <rect width="1600" height="1250" fill="#ffffff"/>
+
+  <text x="40" y="44" font-size="26" font-weight="bold" fill="#111">IPU v2 — what the testbench does, what the hardware computes, what is checked</text>
+  <text x="40" y="70" font-size="15" fill="#444">tb_ipu_top.sv drives the real ipu_top RTL. Expected results come from model/ipu_golden.py (pure-integer Python model of the same policy) via model/gen_top.py.</text>
+
+  <g font-size="14" fill="#222">
+    <rect x="40" y="88" width="22" height="16" fill="#eeeeee" stroke="#777"/><text x="70" y="101">testbench (stand-in for attention unit / host / DRAM / migration engine)</text>
+    <rect x="610" y="88" width="22" height="16" fill="#d8f0d8" stroke="#2e7d32"/><text x="640" y="101">computed in hardware (RTL)</text>
+    <rect x="860" y="88" width="22" height="16" fill="#c8e6c9" stroke="#1b5e20" stroke-width="3"/><text x="890" y="101">new in v2 (hardware)</text>
+    <rect x="1070" y="88" width="22" height="16" fill="#fff3e0" stroke="#e08a00"/><text x="1100" y="101">checked against the golden model</text>
+  </g>
+
+  <!-- setup band -->
+  <rect x="40" y="120" width="1520" height="62" rx="8" fill="#eeeeee" stroke="#777"/>
+  <text x="56" y="146" font-size="15" font-weight="bold" fill="#222">0 · Setup (testbench as host)</text>
+  <text x="56" y="168" font-size="13.5" fill="#333">AXI4-Lite writes: score base address, shape (#seq, #layers, #heads), K[b] per sequence, credit limit, CTRL = enable | RAW | SEL_EN.   Off-chip DRAM model filled with random garbage.</text>
+
+  <!-- column headers -->
+  <rect x="40" y="198" width="745" height="40" rx="6" fill="#1b5e20"/>
+  <text x="412" y="225" font-size="19" font-weight="bold" fill="#fff" text-anchor="middle">PREFILL — per head, t = 1, 2, …, t_p (head stays in the on-chip SRAM)</text>
+  <rect x="815" y="198" width="745" height="40" rx="6" fill="#0d3c84"/>
+  <text x="1187" y="225" font-size="19" font-weight="bold" fill="#fff" text-anchor="middle">DECODE — per step, per head, t = t_p + 1, t_p + 2, …</text>
+
+  <!-- ================= PREFILL ================= -->
+  <g font-size="13.5" fill="#222">
+    <!-- P1 -->
+    <rect x="40" y="252" width="745" height="72" rx="6" fill="#eeeeee" stroke="#777"/>
+    <text x="56" y="276" font-size="15" font-weight="bold">P1 · Testbench sends one attention row</text>
+    <text x="56" y="296">AXI4-Stream packet: t fp16 probabilities (synthetic softmax: sink, recency, heavy hitters, temperature),</text>
+    <text x="56" y="314">16 per beat, header {PREFILL, b, l, h, t}. Random gaps between beats.</text>
+    <line x1="412" y1="324" x2="412" y2="338" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- P2 -->
+    <rect x="40" y="340" width="745" height="72" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="56" y="364" font-size="15" font-weight="bold">P2 · ipu_ingress: fp16 → fixed point (16 tokens per cycle)</text>
+    <text x="56" y="384">delta = round-half-even(p × 2^16), unsigned Q1.16 (17 bits), clamped.</text>
+    <text x="56" y="402">NaN / Inf / negative → delta 0 and sticky BAD_PROB flag.</text>
+    <line x1="412" y1="412" x2="412" y2="426" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- P3 -->
+    <rect x="40" y="428" width="745" height="90" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="56" y="452" font-size="15" font-weight="bold">P3 · ipu_accum + score SRAM: accumulate in place</text>
+    <text x="56" y="472">tokens idx &lt; t−1: S ← saturate(S + delta), S is unsigned Q14.16 (30 bits).</text>
+    <text x="56" y="490">new token idx = t−1: S ← delta, tier ← HIGH.   No DRAM traffic while the head is resident.</text>
+    <text x="56" y="508">Header checks: t must be 1, 2, 3 … (SEQ flag), 1 ≤ t ≤ T_MAX (T_RANGE flag, packet dropped).</text>
+    <line x1="412" y1="518" x2="412" y2="532" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- P4 -->
+    <rect x="40" y="534" width="745" height="54" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="56" y="558" font-size="15" font-weight="bold">P4 · ipu_seq_fsm: head finished?</text>
+    <text x="56" y="578">Next head's packet, first decode packet or FLUSH → enter ST_SEL (if SEL_EN = 1), else go to P6.</text>
+    <line x1="412" y1="588" x2="412" y2="602" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- P5 -->
+    <rect x="40" y="604" width="745" height="166" rx="6" fill="#c8e6c9" stroke="#1b5e20" stroke-width="3"/>
+    <text x="56" y="628" font-size="15" font-weight="bold">P5 · ipu_psel: end-of-prefill selection (only if t_p &gt; K)</text>
+    <rect x="700" y="612" width="70" height="20" rx="4" fill="#1b5e20"/><text x="735" y="627" font-size="12" text-anchor="middle" fill="#fff" font-weight="bold">NEW v2</text>
+    <text x="56" y="650">W_EFF = min(64, max(1, K/2)) newest tokens stay HIGH.  Candidates: idx &lt; t_p − W_EFF.</text>
+    <text x="56" y="670">Decayed value cmp = S &lt;&lt; (12 − sh), sh = round(log2(age)), age = t_p − 1 − idx  (RAW mode: cmp = S).</text>
+    <text x="56" y="690">42 radix passes over the SRAM rows, one bit per pass → threshold T = D-th smallest cmp, D = t_p − K.</text>
+    <text x="56" y="710">Final pass: demote every cmp &lt; T, plus the oldest tokens with cmp = T until exactly D are demoted.</text>
+    <text x="56" y="730">Each demoted idx → demote packet {b, l, h, idx} (credit flow control); tier ← LOW in SRAM (masked write,</text>
+    <text x="56" y="750">S kept). ≈ 42 × (rows + 4) + 3 × rows + D cycles per head.</text>
+    <line x1="412" y1="770" x2="412" y2="784" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- P6 -->
+    <rect x="40" y="786" width="745" height="54" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="56" y="810" font-size="15" font-weight="bold">P6 · Drain: ipu_wr_eng writes the head's rows to DRAM</text>
+    <text x="56" y="830">AXI4 write bursts, one 512-bit row (16 score words) per beat. Bank is free for the next head.</text>
+    <line x1="412" y1="840" x2="412" y2="854" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- checks P -->
+    <rect x="40" y="856" width="745" height="92" rx="6" fill="#fff3e0" stroke="#e08a00" stroke-width="1.5"/>
+    <text x="56" y="880" font-size="15" font-weight="bold">Checked after prefill (FLUSH)</text>
+    <text x="56" y="900">✓ every bulk demote packet: same idx, same order as the golden model (head by head, idx ascending)</text>
+    <text x="56" y="920">✓ whole DRAM score image bit-exact (all S values and tiers, incl. the LOW tiers set by ipu_psel)</text>
+    <text x="56" y="940">✓ BULK counter = expected number of bulk demotes</text>
+  </g>
+
+  <!-- ================= DECODE ================= -->
+  <g font-size="13.5" fill="#222">
+    <!-- D1 -->
+    <rect x="815" y="252" width="745" height="72" rx="6" fill="#eeeeee" stroke="#777"/>
+    <text x="831" y="276" font-size="15" font-weight="bold">D1 · Testbench sends one attention row per head per step</text>
+    <text x="831" y="296">t = t_p + step probabilities, header {DECODE, b, l, h, t}. Injected faults: a NaN lane (main),</text>
+    <text x="831" y="314">an out-of-order head (main), a t = 0 header (edge).</text>
+    <line x1="1187" y1="324" x2="1187" y2="338" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- D2 -->
+    <rect x="815" y="340" width="745" height="72" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="831" y="364" font-size="15" font-weight="bold">D2 · ipu_rd_eng: bring the head's scores on chip</text>
+    <text x="831" y="384">AXI4 reads of rows 0 … t−2 from DRAM into the SRAM; the sweep starts as soon as rows arrive.</text>
+    <text x="831" y="402">Predicts the next head (b → l → h order) and prefetches it during this head (MISPRED counter if wrong).</text>
+    <line x1="1187" y1="412" x2="1187" y2="426" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- D3 -->
+    <rect x="815" y="428" width="745" height="90" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="831" y="452" font-size="15" font-weight="bold">D3 · ipu_ingress + ipu_accum (16 tokens per cycle)</text>
+    <text x="831" y="472">HIGH tokens: S ← saturate(S + delta).   LOW tokens: frozen (unchanged).</text>
+    <text x="831" y="490">New token idx = t−1: S ← delta, tier ← HIGH.</text>
+    <text x="831" y="508">Write-through: every updated row goes back to DRAM (ipu_wr_eng).</text>
+    <line x1="1187" y1="518" x2="1187" y2="532" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- D4 -->
+    <rect x="815" y="534" width="745" height="126" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="831" y="558" font-size="15" font-weight="bold">D4 · Victim search, in the same pass (lane_ctl → cmp_shift → min_tree → min_track)</text>
+    <text x="831" y="580">eligible = tier HIGH  and  idx ≠ t−1  and  age ≥ W_EFF</text>
+    <text x="831" y="600">cmp = S &lt;&lt; (12 − sh(age)), 42 bits exact (RAW: cmp = S); ineligible lanes → all-ones</text>
+    <text x="831" y="620">16-lane argmin tree per beat + running minimum over beats → smallest cmp,</text>
+    <text x="831" y="640">ties → oldest token (lowest idx).</text>
+    <line x1="1187" y1="660" x2="1187" y2="674" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+
+    <!-- D5 -->
+    <rect x="815" y="676" width="745" height="108" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="831" y="700" font-size="15" font-weight="bold">D5 · Decide: one victim per head per step, only if t &gt; K</text>
+    <text x="831" y="722">Demote packet {b, l, h, idx} to the migration engine (credit limit, acks).</text>
+    <text x="831" y="742">S recovered as cmp &gt;&gt; (12 − sh); one-beat DRAM write {LOW, S} with WSTRB on that lane only.</text>
+    <text x="831" y="762">No eligible token → NO_ELIG flag.  t ≤ K → nothing demoted.</text>
+    <line x1="1187" y1="784" x2="1187" y2="854" stroke="#444" stroke-width="2" marker-end="url(#ar)"/>
+    <text x="1200" y="824" font-size="13" fill="#555">repeat for the next head / next step</text>
+
+    <!-- checks D -->
+    <rect x="815" y="856" width="745" height="92" rx="6" fill="#fff3e0" stroke="#e08a00" stroke-width="1.5"/>
+    <text x="831" y="880" font-size="15" font-weight="bold">Checked at the end (final FLUSH)</text>
+    <text x="831" y="900">✓ every decode victim packet: same idx, same order as the golden model</text>
+    <text x="831" y="920">✓ final DRAM score image bit-exact    ✓ SWEEPS, VICTIMS, BULK counters</text>
+    <text x="831" y="940">✓ sticky error flags exactly as expected (BAD_PROB, T_RANGE, SEQ, NO_ELIG, SAT)</text>
+  </g>
+
+  <!-- stress band -->
+  <rect x="40" y="966" width="1520" height="80" rx="8" fill="#f6f6f6" stroke="#999"/>
+  <text x="56" y="990" font-size="15" font-weight="bold" fill="#222">Stress applied in every run</text>
+  <text x="56" y="1012" font-size="13.5" fill="#333">Random AXI read/write latency and back-pressure · random gaps on the attention stream · migration engine with random ready and 0–30-cycle ack delay ·</text>
+  <text x="56" y="1032" font-size="13.5" fill="#333">credit limit 8 (1 in raw) · garbage DRAM at start · NaN in unused lanes · K &gt; t_p (no demotion), K = 1, K = 0 · RAW (undecayed) mode · all-equal scores (pure tie-breaking)</text>
+
+  <!-- scenario table -->
+  <text x="40" y="1078" font-size="15" font-weight="bold" fill="#111">Top-level scenarios (Verilator 5.020 and Icarus 12; also 3 unit tests: ingress all 65,536 fp16 inputs, datapath 4,000 beats, argmin tree 3,000 packets)</text>
+  <g font-size="13.5" fill="#222">
+    <rect x="40" y="1090" width="1520" height="28" fill="#e8e8e8"/>
+    <text x="52" y="1109" font-weight="bold">scenario</text><text x="160" y="1109" font-weight="bold">shape (seq × layers × heads)</text><text x="420" y="1109" font-weight="bold">t_p / K</text>
+    <text x="640" y="1109" font-weight="bold">special</text><text x="1110" y="1109" font-weight="bold">packets</text><text x="1220" y="1109" font-weight="bold">bulk demotes</text><text x="1350" y="1109" font-weight="bold">decode victims</text><text x="1490" y="1109" font-weight="bold">result</text>
+
+    <text x="52" y="1138">main</text><text x="160" y="1138">3 × 2 × 2</text><text x="420" y="1138">150/37, 37/40, 5/1</text>
+    <text x="640" y="1138">40 decode steps, NaN lane, out-of-order head</text><text x="1110" y="1138">1,248</text><text x="1220" y="1138">468</text><text x="1350" y="1138">468</text><text x="1490" y="1138" fill="#1b5e20" font-weight="bold">PASS</text>
+    <line x1="40" y1="1146" x2="1560" y2="1146" stroke="#ddd"/>
+    <text x="52" y="1166">raw</text><text x="160" y="1166">1 × 2 × 2</text><text x="420" y="1166">64 / 20</text>
+    <text x="640" y="1166">RAW (undecayed) compare, credit limit 1</text><text x="1110" y="1166">372</text><text x="1220" y="1166">176</text><text x="1350" y="1166">116</text><text x="1490" y="1166" fill="#1b5e20" font-weight="bold">PASS</text>
+    <line x1="40" y1="1174" x2="1560" y2="1174" stroke="#ddd"/>
+    <text x="52" y="1194">edge</text><text x="160" y="1194">1 × 1 × 1</text><text x="420" y="1194">16 / 1</text>
+    <text x="640" y="1194">all-zero and uniform rows, t = 0 header, 99 steps</text><text x="1110" y="1194">116</text><text x="1220" y="1194">15</text><text x="1350" y="1194">99</text><text x="1490" y="1194" fill="#1b5e20" font-weight="bold">PASS</text>
+    <line x1="40" y1="1202" x2="1560" y2="1202" stroke="#ddd"/>
+    <text x="52" y="1222">big</text><text x="160" y="1222">2 × 1 × 2</text><text x="420" y="1222">250 / 62, 90 / 0</text>
+    <text x="640" y="1222">188 demotes per head, constant-score head (all ties)</text><text x="1110" y="1222">700</text><text x="1220" y="1222">554</text><text x="1350" y="1222">20</text><text x="1490" y="1222" fill="#1b5e20" font-weight="bold">PASS</text>
+  </g>
+</svg>

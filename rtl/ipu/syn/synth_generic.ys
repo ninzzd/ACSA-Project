@@ -1,0 +1,7 @@
+# Generic Yosys synthesis of the IPU (score SRAM black-boxed; DRAM is off-chip).
+read_verilog -sv -Isrc src/ipu_ingress.sv src/ipu_lane_ctl.sv src/ipu_accum.sv src/ipu_cmp_shift.sv src/ipu_min_tree.sv src/ipu_min_track.sv src/ipu_fifo.sv src/ipu_pipe.sv src/ipu_rd_eng.sv src/ipu_wr_eng.sv src/ipu_issue.sv src/ipu_csr.sv src/ipu_seq_fsm.sv src/ipu_top.sv
+read_verilog -sv -lib src/ipu_sram_1r1w.sv
+hierarchy -check -top ipu_top
+synth -top ipu_top -flatten
+opt_clean -purge
+tee -o syn/out/generic_stat.txt stat
