@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1010" viewBox="0 0 1500 1010" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <rect width="1500" height="1010" fill="#ffffff"/>
+
+  <!-- title -->
+  <text x="40" y="44" font-size="26" font-weight="bold" fill="#111">IPU v2 — what is in the RTL and in the 0.204 mm² (Nangate45 + FakeRAM45)</text>
+  <text x="40" y="70" font-size="15" fill="#444">Yosys 0.33 + ABC, Nangate45 typical, before layout. Block areas from the hierarchical run (logic 67,322 µm²; flattened run 68,484 µm²).</text>
+
+  <!-- legend -->
+  <g font-size="14" fill="#222">
+    <rect x="40" y="88" width="22" height="16" fill="#d8f0d8" stroke="#2e7d32"/><text x="70" y="101">coded in v1, synthesized (in the area)</text>
+    <rect x="345" y="88" width="22" height="16" fill="#c8e6c9" stroke="#1b5e20" stroke-width="3"/><text x="375" y="101">new in v2, synthesized (in the area)</text>
+    <rect x="640" y="88" width="22" height="16" fill="#dbe8fb" stroke="#1f5fbf"/><text x="670" y="101">SRAM macro model (in the area)</text>
+    <rect x="910" y="88" width="22" height="16" fill="#f1f1f1" stroke="#888" stroke-dasharray="5,3"/><text x="940" y="101">testbench model only (not in the area)</text>
+    <rect x="1210" y="88" width="22" height="16" fill="#fdecea" stroke="#c62828" stroke-dasharray="5,3"/><text x="1240" y="101">not coded / out of scope</text>
+  </g>
+
+  <!-- ========== IPU boundary ========== -->
+  <rect x="300" y="130" width="890" height="650" rx="10" fill="#fbfdfb" stroke="#1b5e20" stroke-width="3"/>
+  <text x="318" y="158" font-size="19" font-weight="bold" fill="#1b5e20">ipu_top — synthesized area 0.204 mm²</text>
+  <text x="318" y="178" font-size="13" fill="#444">logic 0.068 mm² (5,463 flip-flops) + SRAM macro 0.136 mm²</text>
+
+  <!-- datapath ipu_pipe -->
+  <rect x="320" y="195" width="430" height="250" rx="6" fill="#d8f0d8" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="335" y="220" font-size="16" font-weight="bold" fill="#111">ipu_pipe — score datapath</text>
+  <text x="735" y="220" font-size="14" text-anchor="end" fill="#1b5e20" font-weight="bold">30,622 µm²</text>
+  <g font-size="13" fill="#222">
+    <rect x="335" y="232" width="195" height="44" fill="#fff" stroke="#2e7d32"/>
+    <text x="343" y="250">ipu_ingress  2,724</text><text x="343" y="267" fill="#555">fp16 → Q1.16 delta (RNE)</text>
+    <rect x="540" y="232" width="195" height="44" fill="#fff" stroke="#2e7d32"/>
+    <text x="548" y="250">ipu_lane_ctl  690</text><text x="548" y="267" fill="#555">age, W_EFF test, sh per lane</text>
+    <rect x="335" y="284" width="195" height="44" fill="#fff" stroke="#2e7d32"/>
+    <text x="343" y="302">ipu_accum  3,467</text><text x="343" y="319" fill="#555">S += delta, saturating Q14.16</text>
+    <rect x="540" y="284" width="195" height="44" fill="#fff" stroke="#2e7d32"/>
+    <text x="548" y="302">ipu_cmp_shift  4,533</text><text x="548" y="319" fill="#555">cmp = S &lt;&lt; (12 − sh), 42 b</text>
+    <rect x="335" y="336" width="195" height="44" fill="#fff" stroke="#2e7d32"/>
+    <text x="343" y="354">ipu_min_tree  6,874</text><text x="343" y="371" fill="#555">16-lane argmin, oldest wins</text>
+    <rect x="540" y="336" width="195" height="44" fill="#fff" stroke="#2e7d32"/>
+    <text x="548" y="354">ipu_min_track  556</text><text x="548" y="371" fill="#555">running min over beats</text>
+    <text x="343" y="404">pipeline registers + stall logic  11,778</text>
+    <text x="343" y="424" fill="#555">16 tokens per cycle (one 512-bit row)</text>
+  </g>
+
+  <!-- psel NEW -->
+  <rect x="770" y="195" width="400" height="160" rx="6" fill="#c8e6c9" stroke="#1b5e20" stroke-width="3"/>
+  <text x="785" y="220" font-size="16" font-weight="bold" fill="#111">ipu_psel — end-of-prefill selection</text>
+  <text x="1155" y="220" font-size="14" text-anchor="end" fill="#1b5e20" font-weight="bold">11,928 µm²</text>
+  <rect x="1090" y="228" width="66" height="20" rx="4" fill="#1b5e20"/><text x="1123" y="243" font-size="12" text-anchor="middle" fill="#fff" font-weight="bold">NEW v2</text>
+  <g font-size="13" fill="#222">
+    <text x="785" y="248">radix select, 1 bit per pass (42 passes)</text>
+    <text x="785" y="268">→ threshold T = D-th smallest cmp, D = t_p − K</text>
+    <text x="785" y="288">final pass: demote cmp &lt; T + oldest ties</text>
+    <text x="785" y="308">emits idx to issue queue; tier LOW (masked write)</text>
+    <text x="785" y="334" fill="#555">own logic 6,705 + cmp_shift 4,533 + lane_ctl 690</text>
+  </g>
+
+  <!-- control blocks -->
+  <g font-size="13" fill="#222">
+    <rect x="770" y="368" width="195" height="77" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="782" y="390" font-size="15" font-weight="bold">ipu_seq_fsm</text><text x="955" y="390" text-anchor="end" fill="#1b5e20" font-weight="bold">4,328</text>
+    <text x="782" y="410">packet control, prefetch,</text><text x="782" y="428">victim decision, + ST_SEL (v2)</text>
+
+    <rect x="975" y="368" width="195" height="77" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="987" y="390" font-size="15" font-weight="bold">ipu_csr</text><text x="1160" y="390" text-anchor="end" fill="#1b5e20" font-weight="bold">3,468</text>
+    <text x="987" y="410">AXI4-Lite registers, errors,</text><text x="987" y="428">counters (+SEL_EN, BULK)</text>
+
+    <rect x="320" y="458" width="210" height="77" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="332" y="480" font-size="15" font-weight="bold">ipu_rd_eng</text><text x="520" y="480" text-anchor="end" fill="#1b5e20" font-weight="bold">3,979</text>
+    <text x="332" y="500">AXI4 reads: head fill,</text><text x="332" y="518">next-head prefetch</text>
+
+    <rect x="540" y="458" width="210" height="77" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="552" y="480" font-size="15" font-weight="bold">ipu_wr_eng + W buf</text><text x="740" y="480" text-anchor="end" fill="#1b5e20" font-weight="bold">8,495</text>
+    <text x="552" y="500">AXI4 writes: write-through,</text><text x="552" y="518">drain, 1-beat victim (WSTRB)</text>
+
+    <rect x="770" y="458" width="195" height="77" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="782" y="480" font-size="15" font-weight="bold">ipu_issue</text><text x="955" y="480" text-anchor="end" fill="#1b5e20" font-weight="bold">948</text>
+    <text x="782" y="500">demote queue (4 deep),</text><text x="782" y="518">credit limit (acks)</text>
+
+    <rect x="975" y="458" width="195" height="77" rx="6" fill="#d8f0d8" stroke="#2e7d32"/>
+    <text x="987" y="480" font-size="15" font-weight="bold">top glue</text><text x="1160" y="480" text-anchor="end" fill="#1b5e20" font-weight="bold">3,555</text>
+    <text x="987" y="500">SRAM port muxes,</text><text x="987" y="518">write-mask, WSTRB</text>
+  </g>
+
+  <!-- SRAM macro -->
+  <rect x="320" y="550" width="850" height="215" rx="6" fill="#dbe8fb" stroke="#1f5fbf" stroke-width="2"/>
+  <text x="338" y="578" font-size="17" font-weight="bold" fill="#0d3c84">Score bank SRAM: fakeram45_256x512_1r1w (black-box macro model)</text>
+  <text x="1155" y="578" font-size="15" text-anchor="end" fill="#0d3c84" font-weight="bold">135,961 µm²</text>
+  <g font-size="13.5" fill="#1a2a44">
+    <text x="338" y="604">written by syn/fakeram/gen_fakeram45_1r1w.py · 16 KB = 256 rows × 512 bits = one head: 4,096 tokens × 32-bit word {tier, S}</text>
+    <text x="338" y="626">1 read port + 1 write port, 1-cycle read latency, per-bit write mask (FakeRAM45 w_mask_in convention)</text>
+    <text x="338" y="648">area = 4 × official fakeram45_128x256 (33,990.259 µm² each, 151.81 × 223.90 µm) = single-port-equivalent</text>
+    <text x="338" y="670">timing copied from fakeram45_128x256: clk→rd_out 0.302 ns, setup/hold 0.050 ns, min period 0.293 ns</text>
+    <text x="338" y="692">no LEF / GDS / power: area + pins + timing only (enough for synthesis, not for layout)</text>
+  </g>
+  <rect x="338" y="705" width="815" height="46" rx="4" fill="#fff8e1" stroke="#c99a00"/>
+  <text x="350" y="725" font-size="13.5" fill="#6b4e00" font-weight="bold">Caveat: official FakeRAM45 has only single-port (1RW) macros. A real 1R1W bank (8T cells + second</text>
+  <text x="350" y="743" font-size="13.5" fill="#6b4e00" font-weight="bold">decoder) is typically 1.3–2× larger → this 0.136 mm² is a lower bound. Simulation uses a behavioural array.</text>
+
+  <!-- ========== outside: left ========== -->
+  <rect x="40" y="200" width="190" height="140" rx="8" fill="#fdecea" stroke="#c62828" stroke-dasharray="6,4" stroke-width="1.5"/>
+  <text x="54" y="226" font-size="16" font-weight="bold" fill="#8e1b1b">Attention unit</text>
+  <text x="54" y="248" font-size="13" fill="#5a1f1f">out of scope (not coded)</text>
+  <text x="54" y="272" font-size="13" fill="#333">testbench stands in for it:</text>
+  <text x="54" y="292" font-size="13" fill="#333">synthetic softmax rows</text>
+  <text x="54" y="312" font-size="13" fill="#333">(sink, recency, hitters)</text>
+
+  <rect x="40" y="420" width="190" height="125" rx="8" fill="#f1f1f1" stroke="#888" stroke-dasharray="6,4" stroke-width="1.5"/>
+  <text x="54" y="446" font-size="16" font-weight="bold" fill="#333">Host CPU</text>
+  <text x="54" y="468" font-size="13" fill="#444">testbench model</text>
+  <text x="54" y="490" font-size="13" fill="#333">writes K[b], shape, base,</text>
+  <text x="54" y="510" font-size="13" fill="#333">CTRL (enable, SEL_EN),</text>
+  <text x="54" y="530" font-size="13" fill="#333">FLUSH; reads counters</text>
+
+  <!-- arrows left -->
+  <line x1="232" y1="262" x2="318" y2="262" stroke="#333" stroke-width="2" marker-end="url(#ar)"/>
+  <text x="236" y="252" font-size="11.5" fill="#333">AXI4-Stream</text>
+  <text x="236" y="282" font-size="11.5" fill="#333">16×fp16/beat</text>
+  <text x="236" y="297" font-size="11.5" fill="#333">+{ph,b,l,h,t}</text>
+  <line x1="232" y1="482" x2="318" y2="430" stroke="#333" stroke-width="2" marker-end="url(#ar)"/>
+  <text x="236" y="508" font-size="11.5" fill="#333">AXI4-Lite</text>
+
+  <!-- ========== outside: right ========== -->
+  <rect x="1240" y="190" width="225" height="160" rx="8" fill="#fdecea" stroke="#c62828" stroke-dasharray="6,4" stroke-width="1.5"/>
+  <text x="1254" y="216" font-size="16" font-weight="bold" fill="#8e1b1b">Migration engine</text>
+  <text x="1254" y="238" font-size="13" fill="#5a1f1f">not coded</text>
+  <text x="1254" y="262" font-size="13" fill="#333">testbench stands in for it:</text>
+  <text x="1254" y="282" font-size="13" fill="#333">random ready, delayed acks;</text>
+  <text x="1254" y="302" font-size="13" fill="#333">checks every demote packet</text>
+  <text x="1254" y="326" font-size="13" fill="#333">(re-quantize KV: not modelled)</text>
+
+  <rect x="1240" y="370" width="225" height="78" rx="8" fill="#fdecea" stroke="#c62828" stroke-dasharray="6,4" stroke-width="1.5"/>
+  <text x="1254" y="396" font-size="16" font-weight="bold" fill="#8e1b1b">Dequantizer</text>
+  <text x="1254" y="418" font-size="13" fill="#5a1f1f">not coded (int4 / int2 path)</text>
+  <text x="1254" y="436" font-size="13" fill="#5a1f1f">lives with the KV cache</text>
+
+  <rect x="1240" y="468" width="225" height="78" rx="8" fill="#fdecea" stroke="#c62828" stroke-dasharray="6,4" stroke-width="1.5"/>
+  <text x="1254" y="494" font-size="16" font-weight="bold" fill="#8e1b1b">Channel balancer</text>
+  <text x="1254" y="516" font-size="13" fill="#5a1f1f">not coded (algorithm and</text>
+  <text x="1254" y="534" font-size="13" fill="#5a1f1f">placement not settled)</text>
+
+  <!-- arrows right -->
+  <line x1="1190" y1="262" x2="1238" y2="262" stroke="#333" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="1238" y1="300" x2="1190" y2="300" stroke="#333" stroke-width="2" marker-end="url(#ar)"/>
+  <text x="1193" y="252" font-size="11" fill="#333">demote</text>
+  <text x="1193" y="316" font-size="11" fill="#333">ack</text>
+  <text x="1158" y="180" font-size="11.5" text-anchor="end" fill="#333">demote packet = 25 b {b, l, h, idx}; bulk (prefill) and single (decode) share it</text>
+
+  <!-- ========== bottom: DRAM ========== -->
+  <rect x="300" y="830" width="890" height="70" rx="8" fill="#f1f1f1" stroke="#888" stroke-dasharray="6,4" stroke-width="1.5"/>
+  <text x="318" y="858" font-size="16" font-weight="bold" fill="#333">Off-chip DRAM — score region (all heads)  ·  testbench model only, not in the area</text>
+  <text x="318" y="882" font-size="13" fill="#444">AXI4 slave with random latency and back-pressure; filled with random garbage at start (proves no clearing is needed). KV cache itself: out of scope.</text>
+  <line x1="540" y1="782" x2="540" y2="828" stroke="#333" stroke-width="2" marker-end="url(#ar)" marker-start="url(#ar)"/>
+  <text x="552" y="810" font-size="12.5" fill="#333">AXI4 master, 512-bit data (one row per beat): reads (fill/prefetch), writes (write-through, drain, victim)</text>
+
+  <!-- area bar -->
+  <text x="40" y="940" font-size="15" font-weight="bold" fill="#111">Share of the 0.204 mm²</text>
+  <g font-size="12" fill="#fff" font-weight="bold">
+    <rect x="40" y="950" width="950" height="34" fill="#1f5fbf"/><text x="515" y="972" text-anchor="middle">SRAM macro 66.9 %</text>
+    <rect x="990" y="950" width="214" height="34" fill="#2e7d32"/><text x="1097" y="972" text-anchor="middle">ipu_pipe 15.1 %</text>
+    <rect x="1204" y="950" width="83" height="34" fill="#1b5e20"/><text x="1245" y="972" text-anchor="middle">psel 5.9</text>
+    <rect x="1287" y="950" width="173" height="34" fill="#66a96a"/><text x="1373" y="972" text-anchor="middle">other logic 12.2 %</text>
+  </g>
+</svg>

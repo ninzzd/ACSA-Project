@@ -1,6 +1,7 @@
 # IPU v2 — addendum to spec v0.2 (end-of-prefill selection)
 
 Status: RTL v2, 30 Oct 2026. v1 (`rtl/ipu/`) is unchanged; v2 lives in `rtl/ipu_v2/`.
+Figures: [block diagram and area](figures/ipu_v2_blocks.svg), [test and compute flow](figures/ipu_v2_test_flow.svg).
 
 ## 1. What changes
 
